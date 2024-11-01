@@ -1,0 +1,9 @@
+graphviz
+ipywidgets
+matplotlib
+numpy
+plotly
+scikit-learn
+torch
+torchvision
+tqdm
