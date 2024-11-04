@@ -36,8 +36,8 @@ class NoiseScheduler(torch.nn.Module):
                 / self.sqrt_one_minus_alpha_cumprod[t].view(-1, 1, 1, 1))
         mean = mean / self.sqrt_alpha[t].view(-1, 1, 1, 1)
 
-        var = ((1 - self.alpha[t].view(-1, 1, 1, 1)) * self.beta[t].view(-1, 1, 1, 1)
-               / (1 - self.alpha_cumprod[t - 1].view(-1, 1, 1, 1)))
+        var = ((1 - self.alpha_cumprod[t - 1].view(-1, 1, 1, 1)) * self.beta[t].view(-1, 1, 1, 1)
+               / (1 - self.alpha_cumprod[t].view(-1, 1, 1, 1)))
         sigma = torch.sqrt(var)
         z = torch.randn_like(xt)
 
