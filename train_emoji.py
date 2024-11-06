@@ -2,6 +2,7 @@ import torch
 import torchvision
 from PIL import Image
 from torchvision import transforms
+from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import to_pil_image
 from torchvision.utils import make_grid
 
@@ -23,26 +24,25 @@ class SingleImageDataset(torch.utils.data.Dataset):
 
 
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 
 scheduler = NoiseScheduler().to(device)
 
-transform = transforms.Compose([transforms.ToTensor(), normalize])
+transform = transforms.Compose([transforms.Resize((64, 64), InterpolationMode.LANCZOS), transforms.ToTensor(), normalize])
 # transform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor(), normalize])
 
-dataset = EmojiDataset(root='data/emojis/32', transform=transform)
+dataset = EmojiDataset(root='data/emojis/128', transform=transform)
 # dataset = SingleImageDataset('data/fractal.png', length=60000, transform=transform)
 # dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
 # dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 
 
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=16, shuffle=True)
-# model = Model().to(device)
-# model = UNet(c=1, f=16).to(device)
+
 model = UNet2(c=3, f=64).to(device)
 model.train()
 
-num_epochs = 200
+num_epochs = 1_000_000 // len(dataset)
 optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 criterion = torch.nn.MSELoss()
 
@@ -65,11 +65,15 @@ for epoch in range(num_epochs):
 torch.save(model.state_dict(), f'model_emoji.pth')
 print(f"Saved model_emoji.pth")
 
+# model = UNet2(c=3, f=64).to(device)
+# model.load_state_dict(torch.load('model_emoji.pth'))
 model.eval()
 
-z = torch.randn(1024, 3, 32, 32, device=device)
+z = torch.randn(256, 3, 64, 64, device=device)
 t_list = torch.arange(scheduler.steps-1, -1, -1, dtype=torch.long, device=device).unsqueeze(1).expand(-1, z.shape[0])
+
 for t in t_list:
+    print(f"t: {t[0].item()}\r", end='')
     with torch.no_grad():
         pred_noise = model(z, t)
     z, x0 = scheduler.sample_prev_step(z, pred_noise, t)
@@ -80,7 +84,7 @@ x0 = (x0 + 1.) / 2.
 images = x0.cpu()
 
 # Create an image grid
-grid = make_grid(images, nrow=32, padding=2)
+grid = make_grid(images, nrow=16, padding=2)
 grid = to_pil_image(grid)
 grid.save(f'grid_emoji.png')
 print(f"Saved grid_emoji.png")
