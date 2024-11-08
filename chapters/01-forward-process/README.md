@@ -75,6 +75,7 @@ Let's modify our process to be more in line with the formal definition of the fo
 2. In the paper, $\beta$ refers to the variance, but we've been using the standard deviation. The formula for variance is $\text{var} = \text{std}^2$, so our standard deviation is $\sqrt{\beta}$.
 
 Now our function looks like this:
+
 $$
 \Huge
 \mathrm{new\ image} = \sqrt{1 - \beta} * \mathrm{old\ image} + \sqrt{\beta} * \mathrm{Gaussian Noise}(0, 1)
