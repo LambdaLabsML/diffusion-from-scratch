@@ -167,7 +167,7 @@ We can define a new variable $\bar{\alpha}_t$:
 
 $$
 \Huge
-\bar{\alpha}_t := \prod_{s=1}^{t} \alpha_s
+\bar{\alpha}_t := \prod{s=1}^{t} \alpha_s
 $$
 
 And then the new formula for the forward process becomes:
