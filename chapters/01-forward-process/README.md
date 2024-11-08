@@ -166,6 +166,7 @@ $$
 We can define a new variable $\bar{\alpha}_t$:
 
 $$
+\Huge
 \bar{\alpha}_t := \prod_{s=1}^{t} \alpha_s
 $$
 
