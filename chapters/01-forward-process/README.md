@@ -23,7 +23,7 @@ Let's simplify the definition of the forward process to:
 
 $$
 \Huge
-\mathrm{new\ image} = \mathrm{Normal\ Distribution}(a * \mathrm{old\ image}, b)
+\mathrm{new\ i=mage} = \mathrm{Normal\ Distribution}(a * \mathrm{old\ image}, b)
 $$
 
 Where we sample from a normal distribution with mean $a * \text{old image}$ and standard deviation $b$.
@@ -33,7 +33,7 @@ If you're familiar with the "reparameterization trick" [[2]](#jayakody2023repara
 
 $$
 \Huge
-\text{new_image} = a * \text{old_image} + b * \text{Gaussian Noise}(0, 1)
+\mathrm{new\ image} = a * \mathrm{old\ image} + b * \mathrm{Gaussian Noise}(0, 1)
 $$
 
 ```python
@@ -77,7 +77,7 @@ Let's modify our process to be more in line with the formal definition of the fo
 Now our function looks like this:
 $$
 \Huge
-\text{new_image} = \sqrt{1 - \beta} * \text{old_image} + \sqrt{\beta} * \text{Gaussian Noise}(0, 1)
+\mathrm{new\ image} = \sqrt{1 - \beta} * \mathrm{old\ image} + \sqrt{\beta} * \mathrm{Gaussian Noise}(0, 1)
 $$
 
 ```python
@@ -156,6 +156,7 @@ We can already see that even with the same number of steps, using a schedule for
 So far, we've only shown how to progress through the forward process one step at a time. But what if we want to get an image with noise at a specific timestep? If we have to go through all the intermediate steps, it would be very inefficient. When we begin training, we'll need to generate many samples at arbitrary timesteps for our training data.
 
 In the paper, they use the following trick:
+
 $$
 \Huge
 \alpha_t := 1 - \beta_t
@@ -167,15 +168,16 @@ $$
 $$
 
 And then the new formula for the forward process becomes:
+
 $$
 \Huge
-\text{new_image} = \sqrt{\bar{\alpha}_t} * \text{old_image} + \sqrt{1 - \bar{\alpha}_t} * \text{Gaussian Noise}(0, 1)
+\mathrm{new\ image} = \sqrt{\bar{\alpha}_t} * \text{old\ image} + \sqrt{1 - \bar{\alpha}_t} * \mathrm{Gaussian Noise}(0, 1)
 $$
 
 Let's implement this in our code:
 
 ```python
-$$
+```
 
 
 
