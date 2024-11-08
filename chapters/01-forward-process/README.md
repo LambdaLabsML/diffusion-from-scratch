@@ -20,6 +20,7 @@ If this seems complicated, don't worry! We'll build up to this definition step b
 Ignoring the formal definition, let's try to write a simple function that takes an image and adds some Gaussian noise to it.
 
 Let's simplify the definition of the forward process to:
+
 $$
 \Huge
 \mathrm{new\ image} = \mathrm{Normal\ Distribution}(a * \mathrm{old\ image}, b)
