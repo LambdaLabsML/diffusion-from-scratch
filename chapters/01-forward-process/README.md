@@ -22,7 +22,7 @@ Ignoring the formal definition, let's try to write a simple function that takes 
 Let's simplify the definition of the forward process to:
 $$
 \Huge
-\text{new_image} = \text{Normal Distribution}(a * \text{old_image}, b)
+\text{new image} = \text{Normal Distribution}(a * \text{old image}, b)
 $$
 Where we sample from a normal distribution with mean $a * \text{old_image}$ and standard deviation $b$.
 
