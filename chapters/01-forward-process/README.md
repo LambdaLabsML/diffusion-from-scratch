@@ -23,7 +23,7 @@ Let's simplify the definition of the forward process to:
 
 $$
 \Huge
-\mathrm{new\ i=mage} = \mathrm{Normal\ Distribution}(a * \mathrm{old\ image}, b)
+\mathrm{new\ image} = \mathrm{Normal\ Distribution}(a * \mathrm{old\ image}, b)
 $$
 
 Where we sample from a normal distribution with mean $a * \text{old image}$ and standard deviation $b$.
