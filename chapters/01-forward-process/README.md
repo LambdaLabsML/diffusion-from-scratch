@@ -164,6 +164,17 @@ $$
 \bar{\alpha}_t := \prod_{s=1}^{t} \alpha_s
 $$
 
+And then the new formula for the forward process becomes:
+$$
+\Huge
+\text{new_image} = \sqrt{\bar{\alpha}_t} * \text{old_image} + \sqrt{1 - \bar{\alpha}_t} * \text{Gaussian Noise}(0, 1)
+$$
+
+Let's implement this in our code:
+
+```python
+$$
+
 
 
 
