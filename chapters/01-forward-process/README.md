@@ -165,10 +165,10 @@ $$
 
 We can define a new variable $\bar{\alpha}_t$:
 
-$$
+```math
 \Huge
 \bar{\alpha}_{t} := \prod_{s=1}^{t} \alpha_s
-$$
+```
 
 And then the new formula for the forward process becomes:
 
