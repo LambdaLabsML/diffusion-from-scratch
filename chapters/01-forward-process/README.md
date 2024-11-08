@@ -156,13 +156,14 @@ We can already see that even with the same number of steps, using a schedule for
 
 So far, we've only shown how to progress through the forward process one step at a time. But what if we want to get an image with noise at a specific timestep? If we have to go through all the intermediate steps, it would be very inefficient. When we begin training, we'll need to generate many samples at arbitrary timesteps for our training data.
 
-In the paper, they use the following trick:
+In the paper, they use the following trick. Given our previous definition of $\alpha_t$ and $\beta_t$:
 
 $$
 \Huge
 \alpha_t := 1 - \beta_t
 $$
 
+We can define a new variable $\bar{\alpha}_t$:
 
 $$
 \Huge
