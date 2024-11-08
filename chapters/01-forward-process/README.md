@@ -163,6 +163,7 @@ $$
 \alpha_t := 1 - \beta_t
 $$
 
+
 $$
 \Huge
 \bar{\alpha}_t := \prod_{s=1}^{t} \alpha_s
