@@ -22,9 +22,9 @@ Ignoring the formal definition, let's try to write a simple function that takes 
 Let's simplify the definition of the forward process to:
 $$
 \Huge
-\text{new image} = \text{Normal Distribution}(a * \text{old image}, b)
+\mathrm{new\ image} = \mathrm{Normal\ Distribution}(a * \mathrm{old\ image}, b)
 $$
-Where we sample from a normal distribution with mean $a * \text{old_image}$ and standard deviation $b$.
+Where we sample from a normal distribution with mean $a * \text{old image}$ and standard deviation $b$.
 
 
 If you're familiar with the "reparameterization trick" [[2]](#jayakody2023reparameterization), you might recognize that we can rewrite the above equation as:
