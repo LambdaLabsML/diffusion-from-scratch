@@ -180,8 +180,46 @@ $$
 Let's implement this in our code:
 
 ```python
+class NoiseScheduler:
+    def __init__(self, steps=24, beta_start=1e-4, beta_end=0.6):
+        super(NoiseScheduler, self).__init__()
+        self.steps = steps
+        self.beta_start = beta_start
+        self.beta_end = beta_end
+        self.beta = torch.linspace(beta_start, beta_end, steps)
+        self.alpha = 1. - self.beta
+        self.alpha_bar = torch.cumprod(self.alpha, 0)
+
+    def add_noise(self, x0, t):
+        """
+        Adds arbitrary noise to an image
+        :param x0: initial image
+        :param t: step number, 0 indexed (0 <= t < steps)
+        :return: image with noise at step t
+        """
+        alpha_bar = self.alpha_bar[t]
+        noise = torch.randn_like(x0)
+        return math.sqrt(alpha_bar) * x0 + math.sqrt(1 - alpha_bar) * noise
 ```
 
+We can Try it out by running:
+```bash
+python part_d_alpha_bar_trick.py
+```
+
+You can also try changing the `image`, `steps`, `beta_start` `beta_end` arguments to see how that effects the output:
+```bash
+python part_d_alpha_bar_trick.py \
+    --image data/mandrill.png \
+    --beta-start 1e-4 \
+    --beta-end 0.6 \
+    --steps 24
+```
+
+Using the defaults (`image=data/mandrill.png`, `beta_start=1e-4`, `beta_end=0.6`, `steps=24`), our output looks like this:
+![](assets/part-d-alpha-bar-trick.jpg)
+
+This results in similar results to our previous scheduler, but now each step is computed independently, making it much more efficient to sample arbitrary timesteps.
 
 
 

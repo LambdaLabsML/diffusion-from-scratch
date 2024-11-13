@@ -26,7 +26,7 @@ class NoiseScheduler:
         """
         alpha_bar = self.alpha_bar[t]
         noise = torch.randn_like(x0)
-        return math.sqrt(1 - beta) * x + math.sqrt(beta) * noise
+        return math.sqrt(alpha_bar) * x0 + math.sqrt(1 - alpha_bar) * noise
 
 def normalize(x):
     return 2 * x - 1
@@ -38,18 +38,18 @@ def main(image='data/mandrill.png', beta_start=1e-4, beta_end=0.6, num_steps=24)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     img = Image.open(image)
-    x = F.pil_to_tensor(img)
-    x = x.to(torch.float32) / 255.
-    x = x.to(device)
-    x = normalize(x)
+    x0 = F.pil_to_tensor(img)
+    x0 = x0.to(torch.float32) / 255.
+    x0 = x0.to(device)
+    x0 = normalize(x0)
 
-    results = [x.clone().cpu()]
+    results = [x0.clone().cpu()]
 
     noise_scheduler = NoiseScheduler(steps=num_steps, beta_start=beta_start, beta_end=beta_end)
 
     for t in range(num_steps):
-        x = noise_scheduler.add_noise(x, t)
-        results.append(x.clone().cpu())
+        xt = noise_scheduler.add_noise(x0, t)
+        results.append(xt.clone().cpu())
 
     # Save the results
     results = torch.stack(results, dim=0)
@@ -60,7 +60,7 @@ def main(image='data/mandrill.png', beta_start=1e-4, beta_end=0.6, num_steps=24)
 
     os.makedirs('output', exist_ok=True)
 
-    grid.save('output/part-c-beta-schedule.jpg')
+    grid.save('output/part-d-alpha-bar-trick.jpg')
 
 
 if __name__ == "__main__":
