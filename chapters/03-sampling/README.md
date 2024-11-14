@@ -54,10 +54,132 @@ Our sampling loop is relatively simple:
      x = noise_scheduler.sample_prev_step(x, t, pred_noise)
 ```
 
-Of course, without a trained model, the output is pretty much noise:
+You can run this with:
+
+```bash
+python part_a_sampling.py
+```
+
+Of course, without a trained model, the output is not very good:
 
 ![](assets/part-a-sampling.png)
 
 ## (B) Overfitting a single image
 
 Let's combine this with our training code and see if we can overfit a single image
+
+We'll use a really small target image:
+
+```python
+ x0 = torch.zeros(1, 3, 8, 8).to(device)
+ x0[:, :, 2:6, 2:6] = 1
+```
+
+![](assets/part-b-overfitting-target.png)
+
+*Note: (8x8), resized for display*
+
+We train for 10,000 iterations, and sample at the end:
+
+```bash
+python part_b_overfitting.py
+```
+
+Unfortunately, the output is still pretty noisy:
+
+![](assets/part-b-overfitting-output.png)
+
+## (C) Overfitting part 2.
+
+Let's try to improve this:
+* Our schedule is only 24 steps long. Let's increase it to 1000, and adjust our beta end to 0.02, to match the paper.
+* We currently use a batch size of 1. Let's increase this to 128.
+* Let's reduce our learning rate to `1e-4`
+* Let's increase our iterations to 50k
+* We're currently training in color, let's switch to grayscale.
+* Finally, let's increase our model complexity.
+
+Our new model uses more convolutional layers, larger filters, an embedding layer, and a linear projections for adding the embeddings to the intermediate steps:
+
+```python
+class Model(torch.nn.Module):
+   def __init__(self, num_steps=1000):
+      super(Model, self).__init__()
+
+      self.conv1 = torch.nn.Conv2d(1, 64, 5, padding=2)
+      self.conv2 = torch.nn.Conv2d(64, 64, 5, padding=2)
+      self.conv3 = torch.nn.Conv2d(64, 64, 5, padding=2)
+      self.conv4 = torch.nn.Conv2d(64, 64, 5, padding=2)
+      self.conv5 = torch.nn.Conv2d(64, 64, 5, padding=2)
+      self.conv6 = torch.nn.Conv2d(64, 1, 5, padding=2)
+
+
+      self.embed = torch.nn.Sequential(
+         torch.nn.Embedding(num_steps, 64),
+         torch.nn.Linear(64, 64),
+         torch.nn.ReLU(),
+      )
+
+      self.proj1 = torch.nn.Sequential(
+         torch.nn.Linear(64, 64),
+         torch.nn.ReLU(),
+         torch.nn.Linear(64, 64),
+      )
+      self.proj2 = torch.nn.Sequential(
+         torch.nn.Linear(64, 64),
+         torch.nn.ReLU(),
+         torch.nn.Linear(64, 64),
+      )
+      self.proj3 = torch.nn.Sequential(
+         torch.nn.Linear(64, 64),
+         torch.nn.ReLU(),
+         torch.nn.Linear(64, 64),
+      )
+      self.proj4 = torch.nn.Sequential(
+         torch.nn.Linear(64, 64),
+         torch.nn.ReLU(),
+         torch.nn.Linear(64, 64),
+      )
+      self.proj5 = torch.nn.Sequential(
+         torch.nn.Linear(64, 64),
+         torch.nn.ReLU(),
+         torch.nn.Linear(64, 64),
+      )
+
+   def forward(self, x, t):
+      emb = self.embed(t)
+
+      conv1 = self.conv1(x)
+      x = torch.nn.functional.relu(conv1)
+      x = x + self.proj1(emb).view(-1, 64, 1, 1)
+
+      x = self.conv2(x)
+      x = torch.nn.functional.relu(x)
+      x = x + self.proj2(emb).view(-1, 64, 1, 1)
+
+      x = self.conv3(x)
+      x = torch.nn.functional.relu(x)
+      x = x + self.proj3(emb).view(-1, 64, 1, 1)
+
+      x = self.conv4(x)
+      x = torch.nn.functional.relu(x)
+      x = x + self.proj4(emb).view(-1, 64, 1, 1)
+
+      x = self.conv5(x)
+      x = torch.nn.functional.relu(x)
+      x = x + self.proj5(emb).view(-1, 64, 1, 1)
+
+      x = self.conv6(x)
+      return x
+```
+
+You can run this with:
+
+```bash
+python part_c_overfitting_2.py
+```
+
+![](assets/part-c-overfitting-output.png)
+
+This looks better. In the next chapter, let's explore some more serious model architectures, and see if we can get even better results.
+

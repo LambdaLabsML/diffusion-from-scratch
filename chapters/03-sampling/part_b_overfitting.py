@@ -73,15 +73,39 @@ def main(beta_start=1e-4, beta_end=0.6, num_steps=24):
     noise_scheduler = NoiseScheduler(steps=num_steps, beta_start=beta_start, beta_end=beta_end).to(device)
     model = Model().to(device)
 
-    x = torch.randn(1, 3, 512, 512).to(device)
+    x0 = torch.zeros(1, 3, 8, 8).to(device)
+    x0[:, :, 2:6, 2:6] = 1
+    x0 = normalize(x0)
+    img = F.to_pil_image(denormalize(x0[0])).resize((256, 256), Image.NEAREST)
+    img.save("part-b-overfitting-target.png")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = torch.nn.MSELoss()
+
+    iterations = 10000
+
+    for it in range(iterations):
+        optimizer.zero_grad()
+        noise = torch.randn_like(x0, device=device)
+        t = torch.randint(0, noise_scheduler.steps, (1,), device=device)
+        x_t = noise_scheduler.add_noise(x0, t, noise)
+        pred_noise = model(x_t, t)
+        loss = criterion(pred_noise, noise)
+        if it % 100 == 0:
+            print(f"Iteration {it}, Loss {loss.item()}")
+        loss.backward()
+        optimizer.step()
+
+    x = torch.randn(1, 3, 8, 8).to(device)
     for step in range(num_steps-1, -1, -1):
         t = torch.tensor(step, device=device).view(1,)
         pred_noise = model(x, t)
         x = noise_scheduler.sample_prev_step(x, t, pred_noise)
 
     x = denormalize(x).clamp(0, 1)
-    img = F.to_pil_image(x[0])
-    img.save("part-a-sampling.png")
+    img = F.to_pil_image(x[0]).resize((256, 256), Image.NEAREST)
+    img.save("part-b-overfitting-output.png")
+    print("Image saved as part-b-overfitting-output.png")
 
 
 if __name__ == "__main__":
