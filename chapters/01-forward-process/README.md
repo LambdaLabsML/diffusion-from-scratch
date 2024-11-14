@@ -156,6 +156,8 @@ We can already see that even with the same number of steps, using a schedule for
 
 So far, we've only shown how to progress through the forward process one step at a time. But what if we want to get an image with noise at a specific timestep? If we have to go through all the intermediate steps, it would be very inefficient. When we begin training, we'll need to generate many samples at arbitrary timesteps for our training data.
 
+One nice quality of the Gaussian distribution is that the sum of two Gaussian random variables is also Gaussian. Since at each step, we sample some noise from a Gaussian distribution, there's a Gaussian distribution that we can sample directly for step $t$.
+
 In the paper, they use the following trick. Given our previous definition of $\alpha_t$ and $\beta_t$:
 
 $$
@@ -174,7 +176,7 @@ And then the new formula for the forward process becomes:
 
 $$
 \Huge
-\mathrm{new\ image} = \sqrt{\bar{\alpha}_t} * \text{old\ image} + \sqrt{1 - \bar{\alpha}_t} * \mathrm{Gaussian Noise}(0, 1)
+\mathrm{new\ image} = \sqrt{\bar{\alpha}_t} * \mathrm{old\ image} + \sqrt{1 - \bar{\alpha}_t} * \mathrm{Gaussian Noise}(0, 1)
 $$
 
 Let's implement this in our code:
@@ -202,7 +204,7 @@ class NoiseScheduler:
         return math.sqrt(alpha_bar) * x0 + math.sqrt(1 - alpha_bar) * noise
 ```
 
-We can Try it out by running:
+We can try it out by running:
 ```bash
 python part_d_alpha_bar_trick.py
 ```
@@ -220,9 +222,6 @@ Using the defaults (`image=data/mandrill.png`, `beta_start=1e-4`, `beta_end=0.6`
 ![](assets/part-d-alpha-bar-trick.jpg)
 
 This results in similar results to our previous scheduler, but now each step is computed independently, making it much more efficient to sample arbitrary timesteps.
-
-
-
 
 
 ## References
