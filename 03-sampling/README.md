@@ -15,10 +15,10 @@
 
 #### The formulas for $\mu_t$ and $\sigma^2_t$ are:
 
-$$
+```math
 \Huge
 \mu_{\theta}(x_t, t) = \frac{1}{\sqrt{\alpha_t}} \left( x_t - \frac{\beta_t}{\sqrt{1 - \bar{\alpha}_t}} \epsilon_{\theta}(x_t, t) \right)
-$$
+```
 
 $$
 \Huge
