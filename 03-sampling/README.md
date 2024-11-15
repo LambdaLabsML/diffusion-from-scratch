@@ -95,7 +95,6 @@ Let's try to improve this:
 * Our schedule is only 24 steps long. Let's increase it to 1000, and adjust our beta end to 0.02, to match the paper.
 * We currently use a batch size of 1. Let's increase this to 128.
 * Let's reduce our learning rate to `1e-4`
-* Let's increase our iterations to 50k
 * We're currently training in color, let's switch to grayscale.
 * Finally, let's increase our model complexity.
 
