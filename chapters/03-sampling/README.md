@@ -99,79 +99,52 @@ Let's try to improve this:
 * We're currently training in color, let's switch to grayscale.
 * Finally, let's increase our model complexity.
 
-Our new model uses more convolutional layers, larger filters, an embedding layer, and a linear projections for adding the embeddings to the intermediate steps:
+Our new model uses a simple U-Net architecture, with an embedding layer that is used to condition the model:
 
 ```python
+class ConvBlock(torch.nn.Module):
+   def __init__(self, in_channels, out_channels, embed_dim):
+      super(ConvBlock, self).__init__()
+      self.conv1 = torch.nn.Conv2d(in_channels, out_channels, 3, padding=1)
+      self.proj = torch.nn.Linear(embed_dim, out_channels)
+      self.conv2 = torch.nn.Conv2d(out_channels, out_channels, 3, padding=1)
+
+   def forward(self, x, embedding):
+      x = self.conv1(x)
+      emb_proj = self.proj(embedding).view(-1, x.size(1), 1, 1)
+      x = torch.nn.functional.relu(x + emb_proj)
+      x = self.conv2(x)
+      x = torch.nn.functional.relu(x)
+      return x
+
 class Model(torch.nn.Module):
-   def __init__(self, num_steps=1000):
+   def __init__(self, num_steps=1000, embed_dim=16):
       super(Model, self).__init__()
 
-      self.conv1 = torch.nn.Conv2d(1, 64, 5, padding=2)
-      self.conv2 = torch.nn.Conv2d(64, 64, 5, padding=2)
-      self.conv3 = torch.nn.Conv2d(64, 64, 5, padding=2)
-      self.conv4 = torch.nn.Conv2d(64, 64, 5, padding=2)
-      self.conv5 = torch.nn.Conv2d(64, 64, 5, padding=2)
-      self.conv6 = torch.nn.Conv2d(64, 1, 5, padding=2)
+      self.embed = torch.nn.Embedding(num_steps, embed_dim)
 
-
-      self.embed = torch.nn.Sequential(
-         torch.nn.Embedding(num_steps, 64),
-         torch.nn.Linear(64, 64),
-         torch.nn.ReLU(),
-      )
-
-      self.proj1 = torch.nn.Sequential(
-         torch.nn.Linear(64, 64),
-         torch.nn.ReLU(),
-         torch.nn.Linear(64, 64),
-      )
-      self.proj2 = torch.nn.Sequential(
-         torch.nn.Linear(64, 64),
-         torch.nn.ReLU(),
-         torch.nn.Linear(64, 64),
-      )
-      self.proj3 = torch.nn.Sequential(
-         torch.nn.Linear(64, 64),
-         torch.nn.ReLU(),
-         torch.nn.Linear(64, 64),
-      )
-      self.proj4 = torch.nn.Sequential(
-         torch.nn.Linear(64, 64),
-         torch.nn.ReLU(),
-         torch.nn.Linear(64, 64),
-      )
-      self.proj5 = torch.nn.Sequential(
-         torch.nn.Linear(64, 64),
-         torch.nn.ReLU(),
-         torch.nn.Linear(64, 64),
-      )
+      self.enc1 = ConvBlock(1, 16, embed_dim)
+      self.enc2 = ConvBlock(16, 32, embed_dim)
+      self.bottleneck = ConvBlock(32, 64, embed_dim)
+      self.upconv2 = torch.nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+      self.dec2 = ConvBlock(64, 32, embed_dim)
+      self.upconv1 = torch.nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2)
+      self.dec1 = ConvBlock(32, 16, embed_dim)
+      self.final = torch.nn.Conv2d(16, 1, kernel_size=1)
 
    def forward(self, x, t):
       emb = self.embed(t)
 
-      conv1 = self.conv1(x)
-      x = torch.nn.functional.relu(conv1)
-      x = x + self.proj1(emb).view(-1, 64, 1, 1)
-
-      x = self.conv2(x)
-      x = torch.nn.functional.relu(x)
-      x = x + self.proj2(emb).view(-1, 64, 1, 1)
-
-      x = self.conv3(x)
-      x = torch.nn.functional.relu(x)
-      x = x + self.proj3(emb).view(-1, 64, 1, 1)
-
-      x = self.conv4(x)
-      x = torch.nn.functional.relu(x)
-      x = x + self.proj4(emb).view(-1, 64, 1, 1)
-
-      x = self.conv5(x)
-      x = torch.nn.functional.relu(x)
-      x = x + self.proj5(emb).view(-1, 64, 1, 1)
-
-      x = self.conv6(x)
-      return x
+      enc1 = self.enc1(x, emb)
+      enc2 = self.enc2(torch.nn.functional.max_pool2d(enc1, 2), emb)
+      bottleneck = self.bottleneck(torch.nn.functional.max_pool2d(enc2, 2), emb)
+      dec2 = self.dec2(torch.cat([enc2, self.upconv2(bottleneck)], 1), emb)
+      dec1 = self.dec1(torch.cat([enc1, self.upconv1(dec2)], 1), emb)
+      out = self.final(dec1)
+      return out
 ```
+
+![](assets/part-c-overfitting-model-diagram.png)
 
 You can run this with:
 
@@ -181,5 +154,5 @@ python part_c_overfitting_2.py
 
 ![](assets/part-c-overfitting-output.png)
 
-This looks better. In the next chapter, let's explore some more serious model architectures, and see if we can get even better results.
+This looks better. In the next chapter, let's explore some more serious model architectures, and see if we train a model that can generate realistic non-trivial images.
 

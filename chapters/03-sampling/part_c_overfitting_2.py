@@ -51,75 +51,46 @@ def normalize(x):
 def denormalize(x):
     return (x + 1) / 2
 
+class ConvBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, embed_dim):
+        super(ConvBlock, self).__init__()
+        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.proj = torch.nn.Linear(embed_dim, out_channels)
+        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, 3, padding=1)
+
+    def forward(self, x, embedding):
+        x = self.conv1(x)
+        emb_proj = self.proj(embedding).view(-1, x.size(1), 1, 1)
+        x = torch.nn.functional.relu(x + emb_proj)
+        x = self.conv2(x)
+        x = torch.nn.functional.relu(x)
+        return x
+
 class Model(torch.nn.Module):
-    def __init__(self, num_steps=1000):
+    def __init__(self, num_steps=1000, embed_dim=16):
         super(Model, self).__init__()
 
-        self.conv1 = torch.nn.Conv2d(1, 64, 5, padding=2)
-        self.conv2 = torch.nn.Conv2d(64, 64, 5, padding=2)
-        self.conv3 = torch.nn.Conv2d(64, 64, 5, padding=2)
-        self.conv4 = torch.nn.Conv2d(64, 64, 5, padding=2)
-        self.conv5 = torch.nn.Conv2d(64, 64, 5, padding=2)
-        self.conv6 = torch.nn.Conv2d(64, 1, 5, padding=2)
+        self.embed = torch.nn.Embedding(num_steps, embed_dim)
 
-
-        self.embed = torch.nn.Sequential(
-            torch.nn.Embedding(num_steps, 64),
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-        )
-
-        self.proj1 = torch.nn.Sequential(
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-        )
-        self.proj2 = torch.nn.Sequential(
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-        )
-        self.proj3 = torch.nn.Sequential(
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-        )
-        self.proj4 = torch.nn.Sequential(
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-        )
-        self.proj5 = torch.nn.Sequential(
-            torch.nn.Linear(64, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 64),
-        )
+        self.enc1 = ConvBlock(1, 16, embed_dim)
+        self.enc2 = ConvBlock(16, 32, embed_dim)
+        self.bottleneck = ConvBlock(32, 64, embed_dim)
+        self.upconv2 = torch.nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.dec2 = ConvBlock(64, 32, embed_dim)
+        self.upconv1 = torch.nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2)
+        self.dec1 = ConvBlock(32, 16, embed_dim)
+        self.final = torch.nn.Conv2d(16, 1, kernel_size=1)
 
     def forward(self, x, t):
         emb = self.embed(t)
 
-        conv1 = self.conv1(x)
-        x = torch.nn.functional.relu(conv1)
-        x = x + self.proj1(emb).view(-1, 64, 1, 1)
-
-        x = self.conv2(x)
-        x = torch.nn.functional.relu(x)
-        x = x + self.proj2(emb).view(-1, 64, 1, 1)
-
-        x = self.conv3(x)
-        x = torch.nn.functional.relu(x)
-        x = x + self.proj3(emb).view(-1, 64, 1, 1)
-
-        x = self.conv4(x)
-        x = torch.nn.functional.relu(x)
-        x = x + self.proj4(emb).view(-1, 64, 1, 1)
-
-        x = self.conv5(x)
-        x = torch.nn.functional.relu(x)
-        x = x + self.proj5(emb).view(-1, 64, 1, 1)
-
-        x = self.conv6(x)
-        return x
+        enc1 = self.enc1(x, emb)
+        enc2 = self.enc2(torch.nn.functional.max_pool2d(enc1, 2), emb)
+        bottleneck = self.bottleneck(torch.nn.functional.max_pool2d(enc2, 2), emb)
+        dec2 = self.dec2(torch.cat([enc2, self.upconv2(bottleneck)], 1), emb)
+        dec1 = self.dec1(torch.cat([enc1, self.upconv1(dec2)], 1), emb)
+        out = self.final(dec1)
+        return out
 
 def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -133,10 +104,10 @@ def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
     img = F.to_pil_image(denormalize(x0[0])).resize((256, 256), Image.NEAREST)
     img.save("part-c-overfitting-target.png")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     criterion = torch.nn.MSELoss()
 
-    iterations = 50000
+    iterations = 10000
 
     for it in range(iterations):
         optimizer.zero_grad()
@@ -145,7 +116,7 @@ def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
         x_t = noise_scheduler.add_noise(x0, t, noise)
         pred_noise = model(x_t, t)
         loss = criterion(pred_noise, noise)
-        if it % 1000 == 0:
+        if it % 100 == 0:
             print(f"Iteration {it}, Loss {loss.item()}")
         loss.backward()
         optimizer.step()
@@ -156,7 +127,7 @@ def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
         pred_noise = model(x, t)
         x = noise_scheduler.sample_prev_step(x, t, pred_noise)
 
-    x = denormalize(x)
+    x = denormalize(x).clamp(0, 1)
     img = F.to_pil_image(x[0]).resize((256, 256), Image.NEAREST)
     img.save("part-c-overfitting-output.png")
     print("Image saved as part-c-overfitting-output.png")
