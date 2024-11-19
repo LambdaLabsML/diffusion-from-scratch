@@ -19,7 +19,7 @@ class MnistNormalizer(nn.Module):
 
 
 class MnistClassifier(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, out_features=64):
         super(MnistClassifier, self).__init__()
         self.normalizer = MnistNormalizer()
         self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
@@ -27,9 +27,9 @@ class MnistClassifier(nn.Module):
         self.conv3 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
         self.conv4 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.fc1 = nn.Linear(64 * 7 * 7, 2048)
-        self.fc2 = nn.Linear(2048, num_classes)
+        self.fc1 = nn.Linear(64 * 7 * 7, out_features)
         self.dropout = nn.Dropout(0.8)
+        self.fc2 = nn.Linear(out_features, num_classes)
 
     def forward(self, x):
         x = self.normalizer(x)
@@ -46,8 +46,8 @@ class MnistClassifier(nn.Module):
         return x
 
 class MnistFeatureExtractor(MnistClassifier):
-    def __init__(self, num_classes=10):
-        super(MnistFeatureExtractor, self).__init__(num_classes)
+    def __init__(self, num_classes=10, out_features=64):
+        super(MnistFeatureExtractor, self).__init__(num_classes, out_features)
 
     def load_state_dict(self, state_dict, strict=True, assign=False):
         super(MnistFeatureExtractor, self).load_state_dict(state_dict, strict, assign)
@@ -152,7 +152,6 @@ def main():
     val_dataset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=ToTensor())
     val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size=256, shuffle=False)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=10)
     criterion = torch.nn.CrossEntropyLoss()
     callbacks = [
         SaveBestModel(),
@@ -163,11 +162,7 @@ def main():
     validate(0, model, val_data_loader, criterion, [], device)
     for epoch in range(1, num_epochs+1):
         train(epoch, model, data_loader, optimizer, criterion, device)
-        val_loss = validate(epoch, model, val_data_loader, criterion, callbacks, device)
-        prev_lr = optimizer.param_groups[0]['lr']
-        # scheduler.step(val_loss)
-        # if prev_lr != optimizer.param_groups[0]['lr']:
-        #     print('[Scheduler]', f'Learning rate changed to {optimizer.param_groups[0]["lr"]:.6f}')
+        validate(epoch, model, val_data_loader, criterion, callbacks, device)
 
 if __name__ == '__main__':
     main()

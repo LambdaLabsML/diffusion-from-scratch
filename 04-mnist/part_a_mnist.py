@@ -1,13 +1,9 @@
 import argparse
-import math
-import os
 
 import torch
 import torchvision
-from PIL import Image
 import torchvision.transforms.functional as F
 from torchvision.utils import make_grid
-import matplotlib.pyplot as plt
 
 class NoiseScheduler(torch.nn.Module):
     def __init__(self, steps=24, beta_start=1e-4, beta_end=0.6):
@@ -94,18 +90,18 @@ class Model(torch.nn.Module):
         out = self.final(dec1)
         return out
 
-def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
+def train(batch_size=128, epochs=10, lr=1e-3):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    noise_scheduler = NoiseScheduler(steps=num_steps, beta_start=beta_start, beta_end=beta_end).to(device)
+    noise_scheduler = NoiseScheduler(steps=1000, beta_start=1e-4, beta_end=0.02).to(device)
     model = Model().to(device)
     transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), normalize])
     dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.MSELoss()
 
     # Train
-    for epoch in range(10):
+    for epoch in range(epochs):
         loss_epoch = 0
         n = 0
         for x, _ in data_loader:
@@ -125,13 +121,15 @@ def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
 
     torch.save(model.state_dict(), 'model_part_a.pth')
 
-    # Test
+def test():
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    noise_scheduler = NoiseScheduler(steps=1000, beta_start=1e-4, beta_end=0.02).to(device)
     model = Model().to(device)
     model.load_state_dict(torch.load('model_part_a.pth', weights_only=True))
     model.eval()
 
     x = torch.randn(64, 1, 28, 28).to(device)
-    for step in range(num_steps-1, -1, -1):
+    for step in range(noise_scheduler.steps-1, -1, -1):
         with torch.no_grad():
             t = torch.tensor(step, device=device).expand(x.size(0),)
             pred_noise = model(x, t)
@@ -145,13 +143,15 @@ def main(beta_start=1e-4, beta_end=0.02, num_steps=1000, batch_size=128):
     grid.save("part-a-mnist-output.png")
     print("Image saved as part-a-mnist-output.png")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
-    parser.add_argument('--beta-start', type=float, default=1e-4, help="Starting beta value")
-    parser.add_argument('--beta-end', type=float, default=0.02, help="Ending beta value")
-    parser.add_argument('--steps', type=int, default=1000, help="Number of diffusion steps")
+    parser.add_argument('command', choices=['train', 'test'], help="Command to execute")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
+    parser.add_argument('--epochs', type=int, default=10, help="Number of epochs")
+    parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
     args = parser.parse_args()
 
-    main(args.beta_start, args.beta_end, args.steps, args.batch_size)
+    if args.command == 'train':
+        train(batch_size=args.batch_size, epochs=args.epochs, lr=args.lr)
+    elif args.command == 'test':
+        test()
