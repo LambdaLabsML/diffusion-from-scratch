@@ -8,7 +8,7 @@ import torchvision.transforms.functional as F
 from torchvision.utils import make_grid
 
 class NoiseScheduler(torch.nn.Module):
-    def __init__(self, steps=24, beta_start=1e-4, beta_end=0.6):
+    def __init__(self, steps=1000, beta_start=1e-4, beta_end=0.02):
         super(NoiseScheduler, self).__init__()
         self.steps = steps
         self.beta_start = beta_start
