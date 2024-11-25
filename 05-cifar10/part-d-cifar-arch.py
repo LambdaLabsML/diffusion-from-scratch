@@ -85,10 +85,10 @@ class TimestepBlock(torch.nn.Module):
 class ResnetBlock(TimestepBlock):
     def __init__(self, in_channels, out_channels, embed_dim):
         super(ResnetBlock, self).__init__()
-        self.norm1 = torch.nn.GroupNorm(16, in_channels)
+        self.norm1 = torch.nn.GroupNorm(32, in_channels)
         self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.proj = torch.nn.Linear(embed_dim, out_channels)
-        self.norm2 = torch.nn.GroupNorm(16, out_channels)
+        self.norm2 = torch.nn.GroupNorm(32, out_channels)
         self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         if in_channels != out_channels:
             self.shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
@@ -135,7 +135,7 @@ class TimestepBlockSequential(torch.nn.Sequential, TimestepBlock):
         return x
 
 class Model(torch.nn.Module):
-    def __init__(self, num_steps=1000, ch=16):
+    def __init__(self, num_steps=1000, ch=32):
         super(Model, self).__init__()
 
         embed_dim = ch * 4
@@ -160,10 +160,6 @@ class Model(torch.nn.Module):
 
             ResnetBlock(ch*2, ch*2, embed_dim),
             ResnetBlock(ch*2, ch*2, embed_dim),
-            Downsample(ch*2, ch*2),
-
-            ResnetBlock(ch*2, ch*2, embed_dim),
-            ResnetBlock(ch*2, ch*2, embed_dim),
         ])
 
         self.middle_block = TimestepBlockSequential(
@@ -172,13 +168,6 @@ class Model(torch.nn.Module):
         )
 
         self.output_blocks = torch.nn.ModuleList([
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            TimestepBlockSequential(
-                ResnetBlock(ch*4, ch*2, embed_dim),
-                Upsample(ch*2, ch*2),
-            ),
-
             ResnetBlock(ch*4, ch*2, embed_dim),
             ResnetBlock(ch*4, ch*2, embed_dim),
             TimestepBlockSequential(
@@ -199,7 +188,7 @@ class Model(torch.nn.Module):
         ])
 
         self.out = torch.nn.Sequential(
-            torch.nn.GroupNorm(16, ch),
+            torch.nn.GroupNorm(32, ch),
             torch.nn.SiLU(),
             torch.nn.Conv2d(ch, 3, kernel_size=3, padding=1)
         )
@@ -248,13 +237,13 @@ def train(batch_size=128, epochs=80, lr=1e-3):
         loss_epoch /= n
         print(f"Epoch {epoch}, Loss {loss_epoch}")
 
-    torch.save(model.state_dict(), 'cifar-deeper-model.pth')
+    torch.save(model.state_dict(), 'cifar-arch-model.pth')
 
 def test():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler(steps=1000, beta_start=1e-4, beta_end=0.02).to(device)
     model = Model().to(device)
-    model.load_state_dict(torch.load('cifar-deeper-model.pth', weights_only=True))
+    model.load_state_dict(torch.load('cifar-arch-model.pth', weights_only=True))
     model.eval()
 
     x = torch.randn(64, 3, 32, 32).to(device)
@@ -269,8 +258,8 @@ def test():
     # Create an image grid
     grid = make_grid(x, nrow=8, padding=2)
     grid = F.to_pil_image(grid)
-    grid.save("cifar-deeper-output.png")
-    print("Image saved as cifar-deeper-output.png")
+    grid.save("cifar-arch-output.png")
+    print("Image saved as cifar-arch-output.png")
 
 def eval(batch_size):
     from eval import eval_nll
@@ -279,7 +268,7 @@ def eval(batch_size):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
     model = Model().to(device)
-    model.load_state_dict(torch.load('cifar-deeper-model.pth', weights_only=True))
+    model.load_state_dict(torch.load('cifar-arch-model.pth', weights_only=True))
     model.eval()
 
     transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), normalize])
@@ -292,7 +281,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
-    parser.add_argument('--epochs', type=int, default=80, help="Number of epochs")
+    parser.add_argument('--epochs', type=int, default=120, help="Number of epochs")
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
     parser.add_argument('--fid-samples', type=int, default=50000, help="Number of samples for FID calculation")
     args = parser.parse_args()
