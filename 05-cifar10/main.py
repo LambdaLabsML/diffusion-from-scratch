@@ -4,7 +4,6 @@ import time
 from abc import abstractmethod
 
 import torch
-import torchinfo
 import torchvision
 import torchvision.transforms.functional as F
 from matplotlib import pyplot as plt
