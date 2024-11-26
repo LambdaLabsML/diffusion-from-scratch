@@ -214,8 +214,14 @@ class Model(torch.nn.Module):
             x = module(x, emb)
         return self.out(x)
 
-def train(batch_size=128, epochs=80, lr=1e-3, model_channels=32, activation_fn=torch.nn.SiLU,
-          num_res_blocks=2, channel_mult=(1, 2, 2, 2), hflip=True, dropout=0.1):
+def train(batch_size=128,
+          epochs=80, lr=1e-3,
+          model_channels=32,
+          activation_fn=torch.nn.SiLU,
+          num_res_blocks=2,
+          channel_mult=(1, 2, 2, 2),
+          hflip=True,
+          dropout=0.1):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
     model = Model(model_channels=model_channels,
@@ -258,8 +264,11 @@ def train(batch_size=128, epochs=80, lr=1e-3, model_channels=32, activation_fn=t
 
     torch.save(model.state_dict(), 'part-f-cifar-hflips-model.pth')
 
-def test(model_channels=32, activation_fn=torch.nn.SiLU,
-         num_res_blocks=2, channel_mult=(1, 2, 2, 2), dropout=0.1):
+def test(model_channels=32,
+         activation_fn=torch.nn.SiLU,
+         num_res_blocks=2,
+         channel_mult=(1, 2, 2, 2),
+         dropout=0.1):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
     model = Model(model_channels=model_channels,
@@ -298,6 +307,7 @@ if __name__ == "__main__":
     parser.add_argument('--channel-mult', type=int, nargs=4, default=(1, 2, 2, 2), help="Channel multipliers")
     parser.add_argument('--hflip', action='store_true', help="Use horizontal flips")
     parser.add_argument('--no-hflip', dest='hflip', action='store_false', help="Do not use horizontal flips")
+    parser.add_argument('--dropout', type=float, default=0.1, help="Dropout rate")
 
     args = parser.parse_args()
 
@@ -311,7 +321,8 @@ if __name__ == "__main__":
               activation_fn=activation_fn,
               num_res_blocks=args.num_res_blocks,
               channel_mult=args.channel_mult,
-              hflip=args.hflip)
+              hflip=args.hflip,
+              dropout=args.dropout)
     elif args.command == 'test':
         test(model_channels=args.model_channels,
              activation_fn=activation_fn,
