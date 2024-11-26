@@ -2,7 +2,6 @@ import argparse
 import math
 
 import torch
-import torchinfo
 import torchvision
 import torchvision.transforms.functional as F
 from torchvision.utils import make_grid
@@ -39,7 +38,7 @@ class NoiseScheduler(torch.nn.Module):
         z[t.expand_as(z) == 0] = 0
 
         mean = (1 / torch.sqrt(self.alpha[t])) * (xt - (self.beta[t] / torch.sqrt(1 - self.alpha_bar[t])) * pred_noise)
-        var = ((1 - self.alpha_bar[t - 1])  / (1 - self.alpha_bar[t])) * self.beta[t]
+        var = ((1 - self.alpha_bar[t - 1]) / (1 - self.alpha_bar[t])) * self.beta[t]
         sigma = torch.sqrt(var)
 
         x = mean + sigma * z
@@ -56,7 +55,7 @@ def denormalize(x):
     return (x + 1) / 2
 
 class PositionalEncoding(torch.nn.Module):
-    def __init__(self, d_model, max_len=5000):
+    def __init__(self, d_model, max_len=1000):
         super(PositionalEncoding, self).__init__()
 
         # Create a matrix to hold the positional encodings
@@ -77,28 +76,34 @@ class PositionalEncoding(torch.nn.Module):
         return self.pe[x]
 
 class ResnetBlock(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, embed_dim):
+    def __init__(self, in_channels, out_channels, embed_channels):
         super(ResnetBlock, self).__init__()
-        self.norm1 = torch.nn.GroupNorm(16, in_channels)
-        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.proj = torch.nn.Linear(embed_dim, out_channels)
-        self.norm2 = torch.nn.GroupNorm(16, out_channels)
-        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1) if in_channels != out_channels else None
+        self.in_layers = torch.nn.Sequential(
+            torch.nn.GroupNorm(16, in_channels),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        )
+        self.emb_layers = torch.nn.Sequential(
+            torch.nn.ReLU(),
+            torch.nn.Linear(embed_channels, out_channels)
+        )
+        self.out_layers = torch.nn.Sequential(
+            torch.nn.GroupNorm(16, out_channels),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        )
+        if in_channels != out_channels:
+            self.shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        else:
+            self.shortcut = torch.nn.Identity()
 
     def forward(self, x, embedding):
         _input = x
-        x = self.norm1(x)
-        x = torch.nn.functional.relu(x)
-        x = self.conv1(x)
-        emb_proj = self.proj(embedding).view(-1, x.size(1), 1, 1)
-        x = x + emb_proj
-        x = self.norm2(x)
-        x = torch.nn.functional.relu(x)
-        x = self.conv2(x)
-        if self.shortcut is not None:
-            _input = self.shortcut(_input)
-        return x + _input
+        x = self.in_layers(x)
+        emb_out = self.emb_layers(embedding).view(-1, x.size(1), 1, 1)
+        x = x + emb_out
+        x = self.out_layers(x)
+        return x + self.shortcut(_input)
 
 class Upsample(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -119,18 +124,17 @@ class Downsample(torch.nn.Module):
         return self.conv(x)
 
 class Model(torch.nn.Module):
-    def __init__(self, num_steps=1000, embed_dim=64):
+    def __init__(self, image_channels=3, embed_dim=64):
         super(Model, self).__init__()
 
         self.embed = torch.nn.Sequential(
-            PositionalEncoding(embed_dim, num_steps),
+            PositionalEncoding(embed_dim),
             torch.nn.Linear(embed_dim, embed_dim),
             torch.nn.ReLU(),
             torch.nn.Linear(embed_dim, embed_dim),
-            torch.nn.ReLU(),
         )
 
-        self.conv_in = torch.nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        self.conv_in = torch.nn.Conv2d(image_channels, 16, kernel_size=3, padding=1)
         self.enc1_1 = ResnetBlock(16, 16, embed_dim)
         self.enc1_2 = ResnetBlock(16, 32, embed_dim)
         self.downconv1 = Downsample(32, 32)
@@ -146,7 +150,7 @@ class Model(torch.nn.Module):
         self.dec1_1 = ResnetBlock(64, 32, embed_dim)
         self.dec1_2 = ResnetBlock(32, 16, embed_dim)
         self.norm_out = torch.nn.GroupNorm(16, 16)
-        self.conv_out = torch.nn.Conv2d(16, 3, kernel_size=3, padding=1)
+        self.conv_out = torch.nn.Conv2d(16, image_channels, kernel_size=3, padding=1)
 
     def forward(self, x, t):
         emb = self.embed(t)
@@ -175,7 +179,7 @@ class Model(torch.nn.Module):
 
 def train(batch_size=128, epochs=80, lr=1e-3):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    noise_scheduler = NoiseScheduler(steps=1000, beta_start=1e-4, beta_end=0.02).to(device)
+    noise_scheduler = NoiseScheduler().to(device)
     model = Model().to(device)
     transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), normalize])
     dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
@@ -206,7 +210,7 @@ def train(batch_size=128, epochs=80, lr=1e-3):
 
 def test():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    noise_scheduler = NoiseScheduler(steps=1000, beta_start=1e-4, beta_end=0.02).to(device)
+    noise_scheduler = NoiseScheduler().to(device)
     model = Model().to(device)
     model.load_state_dict(torch.load('part-a-cifar-model.pth', weights_only=True))
     model.eval()
@@ -226,34 +230,15 @@ def test():
     grid.save("part-a-cifar-output.png")
     print("Image saved as part-a-cifar-output.png")
 
-def eval(batch_size):
-    from eval import eval_nll
-
-    # Load model and evaluate NLL
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    noise_scheduler = NoiseScheduler().to(device)
-    model = Model().to(device)
-    model.load_state_dict(torch.load('part-a-cifar-model.pth', weights_only=True))
-    model.eval()
-
-    transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), normalize])
-    test_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-
-    eval_nll(model, test_loader, noise_scheduler)
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
     parser.add_argument('--batch-size', type=int, default=80, help="Batch size")
     parser.add_argument('--epochs', type=int, default=120, help="Number of epochs")
     parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
-    parser.add_argument('--fid-samples', type=int, default=50000, help="Number of samples for FID calculation")
     args = parser.parse_args()
 
     if args.command == 'train':
         train(batch_size=args.batch_size, epochs=args.epochs, lr=args.lr)
     elif args.command == 'test':
         test()
-    elif args.command == 'eval':
-        eval(batch_size=args.batch_size)

@@ -73,28 +73,34 @@ class PositionalEncoding(torch.nn.Module):
         return self.pe[x]
 
 class ResnetBlock(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, embed_dim):
+    def __init__(self, in_channels, out_channels, embed_channels):
         super(ResnetBlock, self).__init__()
-        self.norm1 = torch.nn.GroupNorm(16, in_channels)
-        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.proj = torch.nn.Linear(embed_dim, out_channels)
-        self.norm2 = torch.nn.GroupNorm(16, out_channels)
-        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1) if in_channels != out_channels else None
+        self.in_layers = torch.nn.Sequential(
+            torch.nn.GroupNorm(16, in_channels),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        )
+        self.emb_layers = torch.nn.Sequential(
+            torch.nn.ReLU(),
+            torch.nn.Linear(embed_channels, out_channels)
+        )
+        self.out_layers = torch.nn.Sequential(
+            torch.nn.GroupNorm(16, out_channels),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        )
+        if in_channels != out_channels:
+            self.shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        else:
+            self.shortcut = torch.nn.Identity()
 
     def forward(self, x, embedding):
         _input = x
-        x = self.norm1(x)
-        x = torch.nn.functional.relu(x)
-        x = self.conv1(x)
-        emb_proj = self.proj(embedding).view(-1, x.size(1), 1, 1)
-        x = x + emb_proj
-        x = self.norm2(x)
-        x = torch.nn.functional.relu(x)
-        x = self.conv2(x)
-        if self.shortcut is not None:
-            _input = self.shortcut(_input)
-        return x + _input
+        x = self.in_layers(x)
+        emb_out = self.emb_layers(embedding).view(-1, x.size(1), 1, 1)
+        x = x + emb_out
+        x = self.out_layers(x)
+        return x + self.shortcut(_input)
 
 class Upsample(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -123,7 +129,6 @@ class Model(torch.nn.Module):
             torch.nn.Linear(embed_dim, embed_dim),
             torch.nn.ReLU(),
             torch.nn.Linear(embed_dim, embed_dim),
-            torch.nn.ReLU(),
         )
 
         self.conv_in = torch.nn.Conv2d(1, 16, kernel_size=3, padding=1)
