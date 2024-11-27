@@ -393,7 +393,7 @@ Let's train this model now:
 python part_f_cifar_hflips.py train --hflip
 ```
 
-You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
+You can also change additional hyperparameters, such as the learning rate, batch size, number of epochs, number of channels, activation function (`relu`, `silu`, `leakyrelu`, `gelu`), number of residual blocks, and channel multiplier:
 
 ```bash
 python part_f_cifar_hflips.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --hflip
@@ -402,16 +402,69 @@ python part_f_cifar_hflips.py train --batch-size 128 --lr 1e-3 --epochs 120 --mo
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_f_cifar_hflips.py test --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --hflip
+python part_f_cifar_hflips.py test --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1
 ```
 
 Our resulting output looks like this:
 
 ![](assets/part-f-cifar-aug-output.png)
 
-## (G) Attention blocks
+## (G) Dropout
+
+We'll add dropout to our residual blocks. In the DDPM paper, they mentioned using a value of `0.1` improved the quality of the generated images.
+
+```python
+class ResnetBlock(TimestepBlock):
+    def __init__(self, in_channels, out_channels, embed_channels, activation_fn=torch.nn.SiLU, dropout=0.1):
+        super(ResnetBlock, self).__init__()
+        self.in_layers = torch.nn.Sequential(
+            torch.nn.GroupNorm(32, in_channels),
+            activation_fn(),
+            torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        )
+        self.emb_layers = torch.nn.Sequential(
+            activation_fn(),
+            torch.nn.Linear(embed_channels, out_channels)
+        )
+        self.out_layers = torch.nn.Sequential(
+            torch.nn.GroupNorm(32, out_channels),
+            activation_fn(),
+            torch.nn.Dropout(dropout),
+            torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        )
+        if in_channels != out_channels:
+            self.shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        else:
+            self.shortcut = torch.nn.Identity()
+```
+
+Let's train this model now:
+
+```bash 
+python part_g_dropout.py train --hflip
+```
+
+You can also change additional hyperparameters, such as the learning rate, batch size, number of epochs, number of channels, activation function (`relu`, `silu`, `leakyrelu`, `gelu`), number of residual blocks, channel multiplier, and dropout:
+
+```bash
+python part_f_cifar_hflips.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --hflip --dropout 0.1
+```
+
+After training, we can sample a grid of images from the model with:
+
+```bash
+python part_f_cifar_hflips.py test --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1
+```
+
+Our resulting output looks like this:
+
+![](assets/part-f-cifar-aug-output.png)
+
+## (H) Attention blocks
 
 We'll now add attention blocks to our model, to improve the quality of the generated images.
+
+We'll use convolutional layer to project the input to query, key, and value vectors, apply scaled dot-product attention along the channel dimension, and then project the output back to the input dimension.
 
 ```python
 class AttentionBlock(torch.nn.Module):
@@ -419,7 +472,6 @@ class AttentionBlock(torch.nn.Module):
         super(AttentionBlock, self).__init__()
         self.norm = torch.nn.GroupNorm(32, in_channels)
         self.qkv = torch.nn.Conv1d(in_channels, in_channels*3, kernel_size=1)
-        self.attn = torch.nn.MultiheadAttention(in_channels, 1, batch_first=True)
         self.out = torch.nn.Conv1d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x):
@@ -428,7 +480,7 @@ class AttentionBlock(torch.nn.Module):
         x = self.norm(_input)
         qkv = self.qkv(x).permute(0, 2, 1)
         q, k, v = torch.chunk(qkv, 3, dim=2)
-        x, _ = self.attn(q, k, v, need_weights=False)
+        x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
         x = x.permute(0, 2, 1)
         x = self.out(x)
         x = x + _input
@@ -438,22 +490,80 @@ class AttentionBlock(torch.nn.Module):
 Let's train this model now:
 
 ```bash
-python part_g_cifar.py train
+python part_h_cifar_attn.py train --hflip
 ```
 
-You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
+You can also change additional hyperparameters, such as the learning rate, batch size, number of epochs, number of channels, activation function (`relu`, `silu`, `leakyrelu`, `gelu`), number of residual blocks, channel multiplier, dropout, and attention resolutions (list of downscaled resolutions to apply attention to):
 
 ```bash
-python part_g_cifar.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_h_cifar_attn.py train --batch-size 128 --lr 1e-3 --epochs 120 --hflip --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --dropout 0.1 --attention_resolutions 2
 ```
 
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_g_cifar.py test
+python part_h_cifar_attn.py test --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --dropout 0.1 --attention_resolutions 2
 ```
 
 Our resulting output looks like this:
 
 ![](assets/part-h-cifar-attn-output.png)
 
+## Final Training
+
+For our final training, we'll make a couple final improvements to our model:
+
+### EMA
+
+We'll save an exponential moving average (EMA) of the model weights during training. This can reduce the noisiness of the weights, especially later in training
+
+```python
+class EMA:
+    def __init__(self, model, decay=0.9999):
+        self.model = model
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] -= (1 - self.decay) * (self.shadow[name] - param.data)
+
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data
+                param.data = self.shadow[name]
+
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                param.data = self.backup[name]
+        self.backup = {}
+```
+
+We'll add a few more command-line args for training and inference
+```python
+    parser.add_argument('--gpu', type=int, default=None, help="GPU index")
+    parser.add_argument('--model', type=str, default='model.pth', help="Model file")
+    parser.add_argument('--save-checkpoints', action='store_true', help="Save model checkpoints")
+```
+
+We'll now train our final model with EMA, using the same configuration as the DDPM paper
+
+```bash
+python main.py train --batch-size 128 --lr 2e-4 --epochs 2000 --hflip --model-channels 128 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --dropout 0.1 --attention_resolutions 2 --gpu 0 --save-checkpoints
+```
+
+After training, we can sample a grid of images from the model with:
+
+```bash
+python main.py test --model-channels 128 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --dropout 0.1 --attention_resolutions 2 --gpu 0 --model model-ema.pth
+```
+
+![](assets/main.png)
