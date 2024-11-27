@@ -9,7 +9,7 @@ We'll train a diffusion model on this dataset, and generate samples from the mod
 
 ## (A) Initial model
 
-We'll start by using the same model architecture as in the previous chapter, and train for 10 epochs.
+We'll start by using the same model architecture as in the previous chapter, and train for 80 epochs.
 
 ```python
 class Model(torch.nn.Module):
@@ -77,7 +77,7 @@ python part_a_cifar.py train
 You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
 
 ```bash
-python part_a_mnist.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_a_cifar.py train --batch-size 128 --lr 1e-3 --epochs 80
 ```
 
 After training, we can sample a grid of images from the model with:
@@ -92,7 +92,7 @@ Our resulting output looks like this:
 
 ## (B) More channels
 
-By increasing the number of channels in our model, we can improve the quality of the generated images.
+By increasing the number of channels in our model, we can improve the quality of the generated images. Let's double the number of channels in our models from 16 to 32.
 
 ```python
 class Model(torch.nn.Module):
@@ -155,19 +155,19 @@ class Model(torch.nn.Module):
 Let's train this model now:
 
 ```bash
-python part-b-cifar.py train
+python part_b_cifar_more_channels.py train
 ```
 
-You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
+You can also change additional hyperparameters, such as the learning rate, batch size, number of epochs, and number of channels:
 
 ```bash
-python part_b_cifar.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_b_cifar_more_channels.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32
 ```
 
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_b_cifar.py test
+python part_b_cifar_more_channels.py test --model-channels 32
 ```
 
 Our resulting output looks like this:
@@ -189,19 +189,19 @@ We simply replace `torch.nn.ReLU()` with `torch.nn.SiLU()` and `torch.nn.functio
 Let's train this model now:
 
 ```bash
-python part_c_cifar.py train
+python part_c_cifar_silu.py train
 ```
 
-You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
+You can also change additional hyperparameters, such as the learning rate, batch size, number of epochs, number of channels, and the activation function (`relu`, `silu`, `leakyrelu`, `gelu`):
 
 ```bash
-python part_c_cifar.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_c_cifar_silu.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32 --activation silu
 ```
 
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_c_cifar.py test
+python part_c_cifar_silu.py test --model-channels 32 --activation silu
 ```
 
 Our resulting output looks like this:
@@ -295,19 +295,19 @@ Instead of just the output of each resolution being concatenated, we concatenate
 Let's train this model now:
 
 ```bash
-python part_d_cifar.py train
+python part_d_cifar_arch.py train
 ```
 
 You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
 
 ```bash
-python part_d_cifar.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_d_cifar_arch.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32 --activation silu
 ```
 
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_d_cifar.py test
+python part_d_cifar_arch.py test --model-channels 32 --activation silu
 ```
 
 Our resulting output looks like this:
@@ -316,77 +316,56 @@ Our resulting output looks like this:
 
 ## (E) Deeper model
 
-Let's increase the number of downscales, from 2 to 3:
+Let's increase the number of downscales, from 2 to 3. We'll change the way we initialize the model, to make it easier to change the number of downscales.
+
+We'll now use `num_res_blocks` (defaullt `2`) to control the number of residual blocks at each level, and `channel_mult` (default `(2, 2, 2, 1)`) to control the multiplier for the number of channels at each level.
 
 ```python
-        self.input_blocks = torch.nn.ModuleList([
-            torch.nn.Conv2d(3, ch, kernel_size=3, padding=1),
+self.input_blocks = torch.nn.ModuleList([torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
+channels = [model_channels]
 
-            ResnetBlock(ch, ch, embed_dim),
-            ResnetBlock(ch, ch, embed_dim),
-            Downsample(ch, ch),
+for level, mult in enumerate(channel_mult):
+    out_ch = model_channels * mult
+    for _ in range(num_res_blocks):
+        in_ch = channels[-1]
+        self.input_blocks.append(ResnetBlock(in_ch, out_ch, embed_dim, activation_fn))
+        channels.append(out_ch)
+    if level < len(channel_mult) - 1:
+        self.input_blocks.append(Downsample(out_ch, out_ch))
+        channels.append(out_ch)
 
-            ResnetBlock(ch, ch*2, embed_dim),
-            ResnetBlock(ch*2, ch*2, embed_dim),
-            Downsample(ch*2, ch*2),
+self.middle_block = TimestepBlockSequential()
+out_ch = model_channels * channel_mult[-1]
+for _ in range(num_res_blocks):
+    self.middle_block.append(ResnetBlock(out_ch, out_ch, embed_dim, activation_fn))
 
-            ResnetBlock(ch*2, ch*2, embed_dim),
-            ResnetBlock(ch*2, ch*2, embed_dim),
-            Downsample(ch*2, ch*2),
-
-            ResnetBlock(ch*2, ch*2, embed_dim),
-            ResnetBlock(ch*2, ch*2, embed_dim),
-        ])
-
-        self.middle_block = TimestepBlockSequential(
-            ResnetBlock(ch*2, ch*2, embed_dim),
-            ResnetBlock(ch*2, ch*2, embed_dim),
-        )
-
-        self.output_blocks = torch.nn.ModuleList([
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            TimestepBlockSequential(
-                ResnetBlock(ch*4, ch*2, embed_dim),
-                Upsample(ch*2, ch*2),
-            ),
-
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            TimestepBlockSequential(
-                ResnetBlock(ch*4, ch*2, embed_dim),
-                Upsample(ch*2, ch*2),
-            ),
-
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            ResnetBlock(ch*4, ch*2, embed_dim),
-            TimestepBlockSequential(
-                ResnetBlock(ch*3, ch*2, embed_dim),
-                Upsample(ch*2, ch*2),
-            ),
-
-            ResnetBlock(ch*3, ch, embed_dim),
-            ResnetBlock(ch*2, ch, embed_dim),
-            ResnetBlock(ch*2, ch, embed_dim),
-        ])
+self.output_blocks = torch.nn.ModuleList()
+for level, mult in enumerate(reversed(channel_mult)):
+    for i in range(num_res_blocks + 1):
+        in_ch = out_ch + channels.pop()
+        out_ch = model_channels * mult
+        block = TimestepBlockSequential(ResnetBlock(in_ch, out_ch, embed_dim, activation_fn))
+        if i == num_res_blocks and level < len(channel_mult) - 1:
+            block.append(Upsample(out_ch, out_ch))
+        self.output_blocks.append(block)
 ```
 
 Let's train this model now:
 
 ```bash
-python part_e_cifar.py train
+python part_e_cifar_deeper.py train
 ```
 
-You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
+You can also change additional hyperparameters, such as the learning rate, batch size, number of epochs, number of channels, activation function (`relu`, `silu`, `leakyrelu`, `gelu`), number of residual blocks, and channel multiplier:
 
 ```bash
-python part_e_cifar.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_e_cifar_deeper.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1
 ```
 
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_e_cifar.py test
+python part_e_cifar_deeper.py test --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1
 ```
 
 Our resulting output looks like this:
@@ -411,19 +390,19 @@ Specifically, here we'll use random horizontal flips.
 Let's train this model now:
 
 ```bash 
-python part_f_cifar.py train
+python part_f_cifar_hflips.py train --hflip
 ```
 
 You can also change additional hyperparameters, such as the learning rate, batch size, and number of epochs:
 
 ```bash
-python part_f_cifar.py train --batch-size 128 --lr 1e-3 --epochs 10
+python part_f_cifar_hflips.py train --batch-size 128 --lr 1e-3 --epochs 120 --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --hflip
 ```
 
 After training, we can sample a grid of images from the model with:
 
 ```bash
-python part_f_cifar.py test
+python part_f_cifar_hflips.py test --model-channels 32 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --hflip
 ```
 
 Our resulting output looks like this:
