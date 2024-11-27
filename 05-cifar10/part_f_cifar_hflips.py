@@ -283,7 +283,6 @@ if __name__ == "__main__":
     parser.add_argument('--num-res-blocks', type=int, default=2, help="Number of residual blocks")
     parser.add_argument('--channel-mult', type=int, nargs=4, default=(1, 2, 2, 2), help="Channel multipliers")
     parser.add_argument('--hflip', action='store_true', help="Use horizontal flips")
-    parser.add_argument('--no-hflip', dest='hflip', action='store_false', help="Do not use horizontal flips")
 
     args = parser.parse_args()
 
