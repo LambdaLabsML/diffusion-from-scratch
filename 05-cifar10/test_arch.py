@@ -19,8 +19,8 @@ print(f"Number of parameters: {n_params:,}")
 model = Model(image_channels=1,
               model_channels=32,
               activation_fn=torch.nn.SiLU,
-              num_res_blocks=2,
-              channel_mult=(1, 1, 1),
+              num_res_blocks=1,
+              channel_mult=(1, 1, 2),
               dropout=0.1,
               attention_resolutions=(2,))
 n_params = sum(p.numel() for p in model.parameters())

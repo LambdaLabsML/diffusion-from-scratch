@@ -1,11 +1,103 @@
+import csv
+import os
+from collections import namedtuple
+from typing import Optional, Tuple, Any, Union, List, Callable
+
+import PIL
+import torch
+import torchvision
+from torchvision.transforms import ToTensor
+
 import argparse
 import math
+import os
+import shutil
+import time
 from abc import abstractmethod
 
 import torch
 import torchvision
 import torchvision.transforms.functional as F
+from matplotlib import pyplot as plt
 from torchvision.utils import make_grid
+from tqdm import trange
+
+CSV = namedtuple("CSV", ["header", "index", "data"])
+
+class CelebAHQ(torchvision.datasets.VisionDataset):
+    def __init__(self, root,
+                 target_type: Union[List[str], str] = "attr",
+                 transform: Optional[Callable] = None,
+                 target_transform: Optional[Callable] = None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        if isinstance(target_type, list):
+            self.target_type = target_type
+        else:
+            self.target_type = [target_type]
+
+        if not self.target_type and self.target_transform is not None:
+            raise RuntimeError("target_transform is specified but target_type is empty")
+
+        attr = self._load_csv("CelebAMask-HQ-attribute-anno.txt", header=1)
+        self.filename = attr.index
+        self.attr = attr.data
+        # map from {-1, 1} to {0, 1}
+        self.attr = torch.div(self.attr + 1, 2, rounding_mode="floor")
+        self.attr_names = attr.header
+
+
+    def _load_csv(
+            self,
+            filename: str,
+            header: Optional[int] = None,
+    ) -> CSV:
+        with open(os.path.join(self.root, filename)) as csv_file:
+            data = list(csv.reader(csv_file, delimiter=" ", skipinitialspace=True))
+
+        if header is not None:
+            headers = data[header]
+            data = data[header + 1 :]
+        else:
+            headers = []
+
+        indices = [row[0] for row in data]
+        data = [row[1:] for row in data]
+        data_int = [list(map(int, i)) for i in data]
+
+        return CSV(headers, indices, torch.tensor(data_int))
+
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
+        X = PIL.Image.open(os.path.join(self.root, "CelebA-HQ-img-orig", self.filename[index]))
+
+        target: Any = []
+        for t in self.target_type:
+            if t == "attr":
+                target.append(self.attr[index, :])
+            # elif t == "identity":
+            #     target.append(self.identity[index, 0])
+            # elif t == "bbox":
+            #     target.append(self.bbox[index, :])
+            # elif t == "landmarks":
+            #     target.append(self.landmarks_align[index, :])
+            else:
+                # TODO: refactor with utils.verify_str_arg
+                raise ValueError(f'Target type "{t}" is not recognized.')
+
+        if self.transform is not None:
+            X = self.transform(X)
+
+        if target:
+            target = tuple(target) if len(target) > 1 else target[0]
+
+            if self.target_transform is not None:
+                target = self.target_transform(target)
+        else:
+            target = None
+
+        return X, target
+
+    def __len__(self) -> int:
+        return len(self.attr)
 
 ACTIVATION_FUNCTIONS = {
     'relu': torch.nn.ReLU,
@@ -165,10 +257,31 @@ class AttentionBlock(torch.nn.Module):
         x = x + _input
         return x.view(b, c, h, w)
 
+
+class AttributeEmbedding(torch.nn.Module):
+    def __init__(self, num_attributes, dim):
+        super().__init__()
+        # Create an embedding table with distinct rows for each attribute's True/False
+        self.embedding = torch.nn.Embedding(num_attributes * 2, dim)
+
+    def forward(self, attributes):
+        """
+        Args:
+            attributes: Tensor of shape (N, num_attributes) with binary values (0 or 1).
+        Returns:
+            Embedded attributes of shape (N, num_attributes, model_channels).
+        """
+        num_attributes = attributes.shape[1]
+        # Shift indices for each attribute
+        offsets = torch.arange(0, num_attributes * 2, 2, device=attributes.device)
+        unique_indices = attributes + offsets  # Ensure unique indices for each attribute
+        return self.embedding(unique_indices)
+
+
 class Model(torch.nn.Module):
     def __init__(self,
                  image_channels=3,
-                 model_channels=32,
+                 model_channels=128,
                  activation_fn=torch.nn.SiLU,
                  num_res_blocks=2,
                  channel_mult=(1, 2, 2, 2),
@@ -182,6 +295,16 @@ class Model(torch.nn.Module):
             torch.nn.Linear(model_channels, embed_dim),
             activation_fn(),
             torch.nn.Linear(embed_dim, embed_dim),
+        )
+
+        # num_attributes = 40
+        num_attributes = 3
+        self.attr_embed = torch.nn.Sequential(
+            AttributeEmbedding(num_attributes, model_channels),
+            torch.nn.Flatten(start_dim=1),
+            torch.nn.Linear(num_attributes * model_channels, embed_dim),
+            activation_fn(),
+            torch.nn.Linear(embed_dim, embed_dim)
         )
 
         self.input_blocks = torch.nn.ModuleList([torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
@@ -222,8 +345,13 @@ class Model(torch.nn.Module):
             torch.nn.Conv2d(model_channels, image_channels, kernel_size=3, padding=1)
         )
 
-    def forward(self, x, t):
-        emb = self.embed(t)
+    def forward(self, x, t, attr):
+        emb_t = self.embed(t)
+        emb_attr = self.attr_embed(attr)
+        emb = emb_t + emb_attr
+
+        # emb = self.embed(t)
+
         hs = []
         for module in self.input_blocks:
             if isinstance(module, TimestepBlock):
@@ -238,6 +366,34 @@ class Model(torch.nn.Module):
             x = module(x, emb)
         return self.out(x)
 
+class EMA:
+    def __init__(self, model, decay=0.9999):
+        self.model = model
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] -= (1 - self.decay) * (self.shadow[name] - param.data)
+
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data
+                param.data = self.shadow[name]
+
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                param.data = self.backup[name]
+        self.backup = {}
+
 def train(batch_size=128,
           epochs=80,
           lr=1e-3,
@@ -247,8 +403,10 @@ def train(batch_size=128,
           channel_mult=(1, 2, 2, 2),
           hflip=True,
           dropout=0.1,
-          attention_resolutions=(2,)):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+          attention_resolutions=(2,),
+          gpu=None,
+          save_checkpoints=True):
+    device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
     model = Model(model_channels=model_channels,
                   activation_fn=activation_fn,
@@ -257,63 +415,112 @@ def train(batch_size=128,
                   dropout=dropout,
                   attention_resolutions=attention_resolutions)
     model = model.to(device)
+    ema = EMA(model)
+
     transforms = []
     if hflip:
         transforms.append(torchvision.transforms.RandomHorizontalFlip())
     transforms.extend([
+        torchvision.transforms.Resize(64),
         torchvision.transforms.ToTensor(),
         normalize
     ])
     transform = torchvision.transforms.Compose(transforms)
-    dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    dataset = CelebAHQ('/media/disk3/CelebAMaskHQ/CelebAMask-HQ/', transform=transform)
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.MSELoss()
 
     # Train
-    for epoch in range(epochs):
+    if save_checkpoints:
+        os.makedirs('checkpoints', exist_ok=True)
+
+    start = time.time()
+    loss_history = []
+    for epoch in range(1, epochs+1):
+        model.train()
         loss_epoch = 0
         n = 0
-        for x, _ in data_loader:
+        for x, attr in data_loader:
             x = x.to(device)
+            # Filter boolean attributes to "Eyeglasses", "Male", "Young"
+            attr = attr[:, [15, 20, 39]].to(device)
             optimizer.zero_grad()
             noise = torch.randn_like(x, device=device)
             t = torch.randint(0, noise_scheduler.steps, (x.size(0),), device=device)
             x_t = noise_scheduler.add_noise(x, t, noise)
-            pred_noise = model(x_t, t)
+            pred_noise = model(x_t, t, attr)
             loss = criterion(pred_noise, noise)
             loss.backward()
             optimizer.step()
+            ema.update()
             loss_epoch += loss.item()
             n += x.size(0)
         loss_epoch /= n
-        print(f"Epoch {epoch}, Loss {loss_epoch}")
 
-    torch.save(model.state_dict(), 'part-g-cifar-attn-model.pth')
+        loss_history.append(loss_epoch)
 
-def test(model_channels=32,
-         activation_fn=torch.nn.SiLU,
-         num_res_blocks=2,
-         channel_mult=(1, 2, 2, 2),
-         dropout=0.1,
-         attention_resolutions=(2,)):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    noise_scheduler = NoiseScheduler().to(device)
-    model = Model(model_channels=model_channels,
-                  activation_fn=activation_fn,
-                  num_res_blocks=num_res_blocks,
-                  channel_mult=channel_mult,
-                  dropout=dropout,
-                  attention_resolutions=attention_resolutions)
-    model.load_state_dict(torch.load('part-g-cifar-attn-model.pth', weights_only=True))
-    model = model.to(device)
-    model.eval()
+        formatted_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - start))
+        print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
+        plot_loss(loss_history)
 
-    x = torch.randn(64, 3, 32, 32).to(device)
-    for step in range(noise_scheduler.steps-1, -1, -1):
+        torch.save(model.state_dict(), 'model.pth')
+        ema.apply_shadow()
+        torch.save(model.state_dict(), 'model-ema.pth')
+        ema.restore()
+
+        if save_checkpoints:
+            # copy the to checkpoint folder
+            shutil.copy('model.pth', f'checkpoints/model-{epoch:04d}.pth')
+            shutil.copy('model-ema.pth', f'checkpoints/model-ema-{epoch:04d}.pth')
+
+    print(f"Epoch {epoch}, Loss {loss_epoch}, Time {time.time() - start}")
+    torch.save(model.state_dict(), 'part-i-cifar-full-model.pth')
+    ema.apply_shadow()
+    torch.save(model.state_dict(), 'part-i-cifar-full-model-ema.pth')
+    _test(device, noise_scheduler, model, epoch)
+
+def plot_loss(loss_history):
+    with open('loss.csv', 'w') as f:
+        f.write('epoch,loss\n')
+        for i, loss in enumerate(loss_history):
+            f.write(f'{i+1},{loss}\n')
+
+    ema_loss = [loss_history[0]]
+    for loss in loss_history[1:]:
+        ema_loss.append(0.9 * ema_loss[-1] + 0.1 * loss)
+
+    plt.plot(loss_history, color='blue', label='Loss')
+    plt.plot(ema_loss, color='red', linestyle='dashed', label='EMA Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss')
+    plt.legend()
+    plt.grid()
+    plt.savefig('loss.png')
+    plt.close()
+    # plt.show()
+
+def _test(device, noise_scheduler, model, epoch=None, progress=False):
+    # Use seed
+    torch.manual_seed(0)
+
+    x = torch.randn(64, 3, 64, 64).to(device)
+
+    # Generate the attributes tensor
+    elements_per_group = 8
+    base_pattern = torch.cartesian_prod(torch.tensor([0, 1]), torch.tensor([0, 1]), torch.tensor([0, 1]))
+    attributes = base_pattern.repeat_interleave(elements_per_group, dim=0).to(device)
+
+    if progress:
+        steps = trange(noise_scheduler.steps-1, -1, -1)
+    else:
+        steps = range(noise_scheduler.steps-1, -1, -1)
+
+    for step in steps:
         with torch.no_grad():
             t = torch.tensor(step, device=device).expand(x.size(0),)
-            pred_noise = model(x, t)
+            pred_noise = model(x, t, attributes)
             x = noise_scheduler.sample_prev_step(x, t, pred_noise)
 
     x = denormalize(x).clamp(0, 1)
@@ -321,24 +528,52 @@ def test(model_channels=32,
     # Create an image grid
     grid = make_grid(x, nrow=8, padding=2)
     grid = F.to_pil_image(grid)
-    grid.save("part-g-cifar-attn-output.png")
-    print("Image saved as part-g-cifar-attn-output.png")
+    suffix = f"-{epoch:04d}" if epoch is not None else ""
+    filename = f"output{suffix}.png"
+    grid.save(filename)
+    # print(f"Image saved as {filename}")
+    torch.seed() # Reset seed
+
+def test(model_channels=32,
+         activation_fn=torch.nn.SiLU,
+         num_res_blocks=2,
+         channel_mult=(1, 2, 2, 2),
+         dropout=0.1,
+         attention_resolutions=(2,),
+         gpu=None,
+         model_path='model.pth'):
+    device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+    noise_scheduler = NoiseScheduler().to(device)
+    model = Model(model_channels=model_channels,
+                  activation_fn=activation_fn,
+                  num_res_blocks=num_res_blocks,
+                  channel_mult=channel_mult,
+                  dropout=dropout,
+                  attention_resolutions=attention_resolutions)
+    model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.to(device)
+    model.eval()
+    _test(device, noise_scheduler, model, progress=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
-    parser.add_argument('--epochs', type=int, default=120, help="Number of epochs")
-    parser.add_argument('--lr', type=float, default=1e-3, help="Learning rate")
-    parser.add_argument('--model-channels', type=int, default=32, help="Number of channels in the model")
+    parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
+    parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
+    parser.add_argument('--model-channels', type=int, default=128, help="Number of channels in the model")
     parser.add_argument('--activation', type=str, default='silu', choices=ACTIVATION_FUNCTIONS.keys(), help="Activation function")
     parser.add_argument('--num-res-blocks', type=int, default=2, help="Number of residual blocks")
-    parser.add_argument('--channel-mult', type=int, nargs=4, default=(1, 2, 2, 2), help="Channel multipliers")
+    # parser.add_argument('--channel-mult', type=int, nargs=4, default=(1, 1, 2, 2, 4, 4), help="Channel multipliers")
+    parser.add_argument('--channel-mult', type=int, nargs=4, default=(1, 1, 2, 2), help="Channel multipliers")
     parser.add_argument('--hflip', action='store_true', help="Use horizontal flips")
     parser.add_argument('--no-hflip', dest='hflip', action='store_false', help="Do not use horizontal flips")
-    parser.add_argument('--dropout', type=float, default=0.1, help="Dropout rate")
-    parser.add_argument('--attention-resolutions', type=int, nargs='+', default=(2,), help="Resolutions to apply attention")
-
+    parser.add_argument('--dropout', type=float, default=0.0, help="Dropout rate")
+    # parser.add_argument('--attention-resolutions', type=int, nargs='+', default=(16,), help="Resolutions to apply attention")
+    parser.add_argument('--attention-resolutions', type=int, nargs='+', default=(4,), help="Resolutions to apply attention")
+    parser.add_argument('--gpu', type=int, default=None, help="GPU index")
+    parser.add_argument('--model', type=str, default='model.pth', help="Model file")
+    parser.add_argument('--save-checkpoints', action='store_true', help="Save model checkpoints")
     args = parser.parse_args()
 
     activation_fn = ACTIVATION_FUNCTIONS[args.activation]
@@ -353,11 +588,15 @@ if __name__ == "__main__":
               channel_mult=args.channel_mult,
               hflip=args.hflip,
               dropout=args.dropout,
-              attention_resolutions=args.attention_resolutions)
+              attention_resolutions=args.attention_resolutions,
+              gpu=args.gpu,
+              save_checkpoints=args.save_checkpoints)
     elif args.command == 'test':
         test(model_channels=args.model_channels,
              activation_fn=activation_fn,
              num_res_blocks=args.num_res_blocks,
              channel_mult=args.channel_mult,
              dropout=args.dropout,
-             attention_resolutions=args.attention_resolutions)
+             attention_resolutions=args.attention_resolutions,
+             gpu=args.gpu,
+             model_path=args.model)
