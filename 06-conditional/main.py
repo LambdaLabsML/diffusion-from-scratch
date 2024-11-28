@@ -372,11 +372,11 @@ def train(batch_size=128,
         torch.save(ema.state_dict(), ema_path)
 
         if save_checkpoints:
-            # copy the to checkpoint folder
-            shutil.copy(model_path, f'checkpoints/model-{epoch:04d}.pth')
-            shutil.copy(ema_path, f'checkpoints/model-ema-{epoch:04d}.pth')
+            # copy to the checkpoint folder
+            shutil.copy(model_path, os.path.join(checkpoint_dir, f'model-{epoch:04d}.pth'))
+            shutil.copy(ema_path, os.path.join(checkpoint_dir, f'model-ema-{epoch:04d}.pth'))
 
-        if epoch % log_interval == 0:
+        if log_interval != 0 and epoch % log_interval == 0:
             file_path = os.path.join(output_dir, f'img/{epoch:04d}.png')
             _test(device, noise_scheduler, model, file_path)
             ema_file_path = os.path.join(output_dir, f'img-ema/{epoch:04d}.png')
@@ -493,6 +493,7 @@ if __name__ == "__main__":
     parser.add_argument('--output-dir', type=str, default='output', help="Output directory")
     parser.add_argument('--file-path', type=str, default='img.png', help="Output file path")
     parser.add_argument('--conditional', action='store_true', help="Use conditional model")
+    parser.add_argument('--resolution', type=int, default=None, help="Resolution to use")
     args = parser.parse_args()
 
     activation_fn = ACTIVATION_FUNCTIONS[args.activation]
@@ -516,7 +517,8 @@ if __name__ == "__main__":
               log_interval=args.log_interval,
               output_dir=args.output_dir,
               dataset=args.dataset,
-              conditional=args.conditional)
+              conditional=args.conditional,
+              resolution=args.resolution)
     elif args.command == 'test':
         test(model_channels=args.model_channels,
              activation_fn=activation_fn,
