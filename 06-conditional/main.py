@@ -394,8 +394,8 @@ def train(batch_size=128,
         normalize
     ])
     transform = torchvision.transforms.Compose(transforms)
-    dataset = dataset.cls(transform=transform)
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    ds = dataset.cls(transform=transform)
+    data_loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = None
     if warmup > 0:
