@@ -15,10 +15,151 @@ import torchvision.transforms.functional as F
 from PIL import Image
 from matplotlib import pyplot as plt
 from torch.optim.swa_utils import get_ema_multi_avg_fn
+from torch.utils.data import RandomSampler, Sampler
 from torchvision.utils import make_grid
-from tqdm import trange
+from tqdm import trange, tqdm
+
+CONFIGS = {
+    "cifar10": [
+        'train',
+        '--dataset', 'cifar10',
+        '--batch-size', '128',
+        '--grad-clip', '1',
+        '--lr', '2e-4',
+        '--warmup', '5000',
+        '--steps', '800_000',
+        '--val-interval', '2000',
+        '--model-channels', '128',
+        '--channel-mult', '1', '2', '2', '2',
+        '--num-res-blocks', '2',
+        '--attention-resolutions', '2',
+        '--dropout', '0.1',
+        '--hflip',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--progress',
+    ],
+    "cifar10-cond": [
+        'train',
+        '--dataset', 'cifar10',
+        '--conditional',
+        '--batch-size', '128',
+        '--grad-clip', '1',
+        '--lr', '2e-4',
+        '--warmup', '5000',
+        '--steps', '800_000',
+        '--val-interval', '2000',
+        '--model-channels', '128',
+        '--channel-mult', '1', '2', '2', '2',
+        '--num-res-blocks', '2',
+        '--attention-resolutions', '2',
+        '--dropout', '0.1',
+        '--hflip',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--progress',
+    ],
+    'celeba-64': [
+        'train',
+        '--dataset', 'celeba',
+        '--batch-size', '64',
+        '--grad-clip', '1',
+        '--lr', '2e-5',
+        '--warmup', '5000',
+        '--steps', '500_000',
+        '--val-interval', '1000',
+        '--model-channels', '128',
+        '--channel-mult', '1', '1', '2', '2', '4', '4',
+        '--num-res-blocks', '2',
+        '--attention-resolutions', '16',
+        '--dropout', '0.0',
+        '--hflip',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--resolution', '64',
+        '--progress',
+    ],
+    'celeba-128': [
+        'train',
+        '--dataset', 'celeba',
+        '--batch-size', '64',
+        '--grad-clip', '1',
+        '--lr', '2e-5',
+        '--warmup', '5000',
+        '--steps', '500_000',
+        '--val-interval', '1000',
+        '--model-channels', '128',
+        '--channel-mult', '1', '1', '2', '2', '4', '4',
+        '--num-res-blocks', '2',
+        '--attention-resolutions', '16',
+        '--dropout', '0.0',
+        '--hflip',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--resolution', '64',
+        '--progress',
+    ],
+    'celeba-256': [
+        'train',
+        '--dataset', 'celeba',
+        '--batch-size', '16',
+        '--grad-clip', '1',
+        '--lr', '5e-6',
+        '--warmup', '5000',
+        '--steps', '2_000_000',
+        '--val-interval', '1000',
+        '--model-channels', '128',
+        '--channel-mult', '1', '1', '2', '2', '4', '4',
+        '--num-res-blocks', '2',
+        '--attention-resolutions', '16',
+        '--dropout', '0.0',
+        '--hflip',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--resolution', '64',
+        '--progress',
+    ],
+    'mnist': [
+        'train',
+        '--dataset', 'mnist',
+        '--batch-size', '256',
+        '--grad-clip', '1',
+        '--lr', '1e-3',
+        '--warmup', '5000',
+        '--steps', '200_000',
+        '--val-interval', '4000',
+        '--model-channels', '32',
+        '--channel-mult', '1', '1', '2',
+        '--num-res-blocks', '1',
+        '--attention-resolutions', '2',
+        '--dropout', '0.1',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--progress',
+    ],
+    'mnist-cond': [
+        'train',
+        '--dataset', 'mnist',
+        '--conditional',
+        '--batch-size', '256',
+        '--grad-clip', '1',
+        '--lr', '1e-3',
+        '--warmup', '5000',
+        '--steps', '200_000',
+        '--val-interval', '4000',
+        '--model-channels', '32',
+        '--channel-mult', '1', '1', '2',
+        '--num-res-blocks', '1',
+        '--attention-resolutions', '2',
+        '--dropout', '0.1',
+        '--save-checkpoints',
+        '--log-interval', '1',
+        '--progress',
+    ]
+}
 
 CSV = namedtuple("CSV", ["header", "index", "data"])
+
 
 class CelebAHQ(torchvision.datasets.VisionDataset):
     def __init__(self, root,
@@ -41,7 +182,6 @@ class CelebAHQ(torchvision.datasets.VisionDataset):
         self.attr = torch.div(self.attr + 1, 2, rounding_mode="floor")
         self.attr_names = attr.header
 
-
     def _load_csv(
             self,
             filename: str,
@@ -52,7 +192,7 @@ class CelebAHQ(torchvision.datasets.VisionDataset):
 
         if header is not None:
             headers = data[header]
-            data = data[header + 1 :]
+            data = data[header + 1:]
         else:
             headers = []
 
@@ -95,6 +235,7 @@ class CelebAHQ(torchvision.datasets.VisionDataset):
     def __len__(self) -> int:
         return len(self.attr)
 
+
 ACTIVATION_FUNCTIONS = {
     'relu': torch.nn.ReLU,
     'silu': torch.nn.SiLU,
@@ -110,6 +251,7 @@ dataset = [
     Dataset('celeba', partial(CelebAHQ, root='./data/CelebAMask-HQ'), 3, 1024, 40),
 ]
 DATASETS = {d.name: d for d in dataset}
+
 
 class NoiseScheduler(torch.nn.Module):
     def __init__(self, steps=1000, beta_start=1e-4, beta_end=0.02):
@@ -143,7 +285,7 @@ class NoiseScheduler(torch.nn.Module):
         z[t.expand_as(z) == 0] = 0
 
         mean = (1 / torch.sqrt(self.alpha[t])) * (xt - (self.beta[t] / torch.sqrt(1 - self.alpha_bar[t])) * pred_noise)
-        var = ((1 - self.alpha_bar[t - 1])  / (1 - self.alpha_bar[t])) * self.beta[t]
+        var = ((1 - self.alpha_bar[t - 1]) / (1 - self.alpha_bar[t])) * self.beta[t]
         sigma = torch.sqrt(var)
 
         x = mean + sigma * z
@@ -153,11 +295,14 @@ class NoiseScheduler(torch.nn.Module):
         t = t.view(-1, 1, 1, 1)
         return (xt - torch.sqrt(1 - self.alpha_bar[t]) * pred_noise) / torch.sqrt(self.alpha_bar[t])
 
+
 def normalize(x):
     return 2 * x - 1
 
+
 def denormalize(x):
     return (x + 1) / 2
+
 
 class PositionalEncoding(torch.nn.Module):
     def __init__(self, d_model, max_len=1000):
@@ -180,10 +325,12 @@ class PositionalEncoding(torch.nn.Module):
         # Retrieve the positional encodings
         return self.pe[x]
 
+
 class TimestepBlock(torch.nn.Module):
     @abstractmethod
     def forward(self, x, emb):
         raise NotImplementedError
+
 
 class ResnetBlock(TimestepBlock):
     def __init__(self, in_channels, out_channels, embed_channels, activation_fn=torch.nn.SiLU, dropout=0.1):
@@ -216,6 +363,7 @@ class ResnetBlock(TimestepBlock):
         x = self.out_layers(x)
         return x + self.shortcut(_input)
 
+
 class Upsample(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Upsample, self).__init__()
@@ -226,6 +374,7 @@ class Upsample(torch.nn.Module):
         x = self.conv(x)
         return x
 
+
 class Downsample(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Downsample, self).__init__()
@@ -233,6 +382,7 @@ class Downsample(torch.nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+
 
 class TimestepBlockSequential(torch.nn.Sequential, TimestepBlock):
     def forward(self, x, emb):
@@ -243,11 +393,12 @@ class TimestepBlockSequential(torch.nn.Sequential, TimestepBlock):
                 x = module(x)
         return x
 
+
 class AttentionBlock(torch.nn.Module):
     def __init__(self, in_channels):
         super(AttentionBlock, self).__init__()
         self.norm = torch.nn.GroupNorm(32, in_channels)
-        self.qkv = torch.nn.Conv1d(in_channels, in_channels*3, kernel_size=1)
+        self.qkv = torch.nn.Conv1d(in_channels, in_channels * 3, kernel_size=1)
         self.out = torch.nn.Conv1d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x):
@@ -288,7 +439,8 @@ class Model(torch.nn.Module):
         if self.conditional:
             self.class_emb = torch.nn.Embedding(num_classes, embed_dim)
 
-        self.input_blocks = torch.nn.ModuleList([torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
+        self.input_blocks = torch.nn.ModuleList(
+            [torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
         channels = [model_channels]
         ds = 1
         for level, mult in enumerate(channel_mult):
@@ -348,8 +500,33 @@ class Model(torch.nn.Module):
             x = module(x, emb)
         return self.out(x)
 
+class ContinuousSampler(Sampler):
+    def __init__(self, data_source, batch_size, val_interval, shuffle=True):
+        super(ContinuousSampler, self).__init__()
+        self.shuffle = shuffle
+        self.iteration = -1
+        self.items_per_epoch = batch_size * val_interval
+        if shuffle:
+            self.indexes = torch.randperm(len(data_source))
+        else:
+            self.indexes = torch.arange(len(data_source))
+
+    def __len__(self):
+        return self.items_per_epoch
+
+    def __iter__(self):
+        for i in range(self.items_per_epoch):
+            self.iteration += 1
+            if self.iteration == len(self.indexes):
+                if self.shuffle:
+                    self.indexes = torch.randperm(len(self.indexes))
+                self.iteration = 0
+            yield self.indexes[self.iteration % len(self.indexes)]
+
 def train(batch_size=128,
           epochs=80,
+          steps=None,
+          val_interval=None,
           lr=1e-3,
           warmup=0,
           grad_clip=None,
@@ -367,7 +544,8 @@ def train(batch_size=128,
           output_dir='output',
           dataset='cifar10',
           conditional=True,
-          resolution=None):
+          resolution=None,
+          progress=False):
     device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
     dataset = DATASETS[dataset]
     noise_scheduler = NoiseScheduler().to(device)
@@ -395,7 +573,13 @@ def train(batch_size=128,
     ])
     transform = torchvision.transforms.Compose(transforms)
     ds = dataset.cls(transform=transform)
-    data_loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True)
+
+    sampler = None
+    print(f'val_interval: {val_interval}, steps: {steps}')
+    if val_interval is not None:
+        sampler = ContinuousSampler(ds, batch_size, val_interval, shuffle=True)
+    data_loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, sampler=sampler, num_workers=2, pin_memory=True)
+    print(f'Length of dataset: {len(ds)}, length of dataloader: {len(data_loader)}')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = None
     if warmup > 0:
@@ -413,11 +597,24 @@ def train(batch_size=128,
 
     start = time.time()
     loss_history = []
-    for epoch in range(1, epochs+1):
+
+    if steps is not None:
+        epochs = math.ceil(steps / len(data_loader))
+        print(f'Training for {steps} steps ({epochs} epochs)')
+    else:
+        calc_steps = len(data_loader) * epochs
+        print(f'Training for {epochs} epochs ({calc_steps} steps)')
+    iteration = 1
+    for epoch in range(1, epochs + 1):
         model.train()
         loss_epoch = 0
         n = 0
-        for x, cls in data_loader:
+        if progress:
+            batches = pbar = tqdm(enumerate(data_loader), total=len(data_loader), desc=f'Epoch {epoch:04d}')
+        else:
+            batches = enumerate(data_loader)
+
+        for batch_idx, (x, cls) in batches:
             x = x.to(device)
             cls = cls.to(device)
             optimizer.zero_grad()
@@ -436,9 +633,18 @@ def train(batch_size=128,
             if scheduler is not None:
                 scheduler.step()
             ema.update_parameters(model)
-            loss_epoch += loss.item()
             n += x.size(0)
-        loss_epoch /= n
+            loss_epoch += loss.item()
+            if progress:
+                psnr = 20 * math.log10(noise.abs().max().item()) - 10 * math.log10(loss.item())
+                avg_loss_epoch = loss_epoch / (batch_idx + 1)
+                pbar.set_postfix(
+                    {'Iter': iteration, 'Epoch Loss': f'{avg_loss_epoch:.6f}', 'Loss': f'{loss.item():.6f}', 'PSNR': f'{psnr:.6f}'})
+            iteration += 1
+        loss_epoch /= len(data_loader)
+        if progress:
+            pbar.desc = f'Epoch {epoch:04d}, Loss {loss_epoch:.6f}'
+            pbar.close()
 
         loss_history.append(loss_epoch)
 
@@ -458,16 +664,23 @@ def train(batch_size=128,
 
         if log_interval != 0 and epoch % log_interval == 0:
             file_path = os.path.join(output_dir, f'img/{epoch:04d}.png')
-            _test(device, noise_scheduler, model, file_path, dataset=dataset.name, resolution=resolution, conditional=conditional)
+            _test(device, noise_scheduler, model, file_path, dataset=dataset.name, resolution=resolution,
+                  conditional=conditional, progress=progress)
             ema_file_path = os.path.join(output_dir, f'img-ema/{epoch:04d}.png')
-            _test(device, noise_scheduler, ema, ema_file_path, dataset=dataset.name, resolution=resolution, conditional=conditional)
+            _test(device, noise_scheduler, ema, ema_file_path, dataset=dataset.name, resolution=resolution,
+                  conditional=conditional, progress=progress)
+
+
+        if steps is not None and iteration > steps:
+            break
+
 
 def plot_loss(loss_history, output_dir='output'):
     csv_path = os.path.join(output_dir, 'loss.csv')
     with open(csv_path, 'w') as f:
         f.write('epoch,loss\n')
         for i, loss in enumerate(loss_history):
-            f.write(f'{i+1},{loss}\n')
+            f.write(f'{i + 1},{loss}\n')
 
     ema_loss = [loss_history[0]]
     for loss in loss_history[1:]:
@@ -482,7 +695,9 @@ def plot_loss(loss_history, output_dir='output'):
     plt.savefig(os.path.join(output_dir, 'loss.png'))
     plt.close()
 
-def _test(device, noise_scheduler, model, file_path="img.png", progress=False, dataset='cifar10', resolution=None, conditional=True):
+
+def _test(device, noise_scheduler, model, file_path="img.png", progress=False, dataset='cifar10', resolution=None,
+          conditional=True):
     # Use seed
     torch.manual_seed(0)
     dataset = DATASETS[dataset]
@@ -500,13 +715,13 @@ def _test(device, noise_scheduler, model, file_path="img.png", progress=False, d
     x = torch.randn(n, dataset.image_channels, resolution, resolution, device=device)
 
     if progress:
-        steps = trange(noise_scheduler.steps-1, -1, -1)
+        steps = trange(noise_scheduler.steps - 1, -1, -1)
     else:
-        steps = range(noise_scheduler.steps-1, -1, -1)
+        steps = range(noise_scheduler.steps - 1, -1, -1)
 
     for step in steps:
         with torch.no_grad():
-            t = torch.tensor(step, device=device).expand(x.size(0),)
+            t = torch.tensor(step, device=device).expand(x.size(0), )
             if conditional:
                 pred_noise = model(x, t, classes)
             else:
@@ -520,6 +735,7 @@ def _test(device, noise_scheduler, model, file_path="img.png", progress=False, d
     grid = F.to_pil_image(grid)
     grid.save(file_path)
     torch.seed()  # Reset seed
+
 
 def test(model_channels=32,
          activation_fn=torch.nn.SiLU,
@@ -548,24 +764,47 @@ def test(model_channels=32,
     model.eval()
     _test(device, noise_scheduler, model, file_path, progress=True, dataset=dataset.name, conditional=conditional)
 
-if __name__ == "__main__":
+
+def load_config(parser, args):
+    default_args = parser.parse_args([args.command])
+    # print(f'Default Args: {default_args}')
+    config = CONFIGS[args.config]
+    config_args = parser.parse_args(config)
+    # print(f'Config Args: {config_args}')
+    default_items = set((k, str(v)) for k, v in vars(default_args).items())
+    args_items = set((k, str(v)) for k, v in vars(args).items())
+    config_items = set((k, str(v)) for k, v in vars(config_args).items())
+    overrides = (args_items - default_items) - config_items
+
+    for k, _ in overrides:
+        v = getattr(args, k)
+        # print(f'Overriding {k} with {v}')
+        setattr(config_args, k, v)
+    return config_args
+
+
+def main(args=None):
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
-    parser.add_argument('--dataset', choices=['mnist', 'cifar10', 'cifar100', 'celeba'], default='cifar10', help="Dataset to use")
+    parser.add_argument('--dataset', choices=['mnist', 'cifar10', 'cifar100', 'celeba'], default='cifar10',
+                        help="Dataset to use")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
     parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
+    parser.add_argument('--steps', type=int, default=None, help="Number of steps")
+    parser.add_argument('--val-interval', type=int, default=None, help="Validation interval")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
     parser.add_argument('--grad-clip', type=float, default=None, help="Gradient clipping")
     parser.add_argument('--warmup', type=int, default=0, help="Warmup steps")
     parser.add_argument('--ema-decay', type=float, default=0.9999, help="Exponential moving average decay")
     parser.add_argument('--model-channels', type=int, default=128, help="Number of channels in the model")
-    parser.add_argument('--activation', type=str, default='silu', choices=ACTIVATION_FUNCTIONS.keys(), help="Activation function")
+    parser.add_argument('--activation', type=str, default='silu', choices=ACTIVATION_FUNCTIONS.keys(),
+                        help="Activation function")
     parser.add_argument('--num-res-blocks', type=int, default=2, help="Number of residual blocks")
     parser.add_argument('--channel-mult', type=int, nargs='+', default=(1, 2, 2, 2), help="Channel multipliers")
     parser.add_argument('--hflip', action='store_true', help="Use horizontal flips")
-    parser.add_argument('--no-hflip', dest='hflip', action='store_false', help="Do not use horizontal flips")
     parser.add_argument('--dropout', type=float, default=0.1, help="Dropout rate")
-    parser.add_argument('--attention-resolutions', type=int, nargs='+', default=(2,), help="Resolutions to apply attention")
+    parser.add_argument('--attention-resolutions', type=int, nargs='+', default=(2,),
+                        help="Resolutions to apply attention")
     parser.add_argument('--gpu', type=int, default=None, help="GPU index")
     parser.add_argument('--model', type=str, default='model.pth', help="Model file")
     parser.add_argument('--save-checkpoints', action='store_true', help="Save model checkpoints")
@@ -574,13 +813,20 @@ if __name__ == "__main__":
     parser.add_argument('--file-path', type=str, default='img.png', help="Output file path")
     parser.add_argument('--conditional', action='store_true', help="Use conditional model")
     parser.add_argument('--resolution', type=int, default=None, help="Resolution to use")
+    parser.add_argument('--progress', action='store_true', help="Show progress bar")
+    parser.add_argument('--config', choices=CONFIGS.keys(), default=None, help="Configuration to use")
+
     args = parser.parse_args()
+    if args.config is not None:
+        args = load_config(parser, args)
 
     activation_fn = ACTIVATION_FUNCTIONS[args.activation]
 
     if args.command == 'train':
         train(batch_size=args.batch_size,
               epochs=args.epochs,
+              steps=args.steps,
+              val_interval=args.val_interval,
               lr=args.lr,
               grad_clip=args.grad_clip,
               warmup=args.warmup,
@@ -598,7 +844,8 @@ if __name__ == "__main__":
               output_dir=args.output_dir,
               dataset=args.dataset,
               conditional=args.conditional,
-              resolution=args.resolution)
+              resolution=args.resolution,
+              progress=args.progress)
     elif args.command == 'test':
         test(model_channels=args.model_channels,
              activation_fn=activation_fn,
@@ -612,3 +859,7 @@ if __name__ == "__main__":
              dataset=args.dataset,
              conditional=args.conditional,
              resolution=args.resolution)
+
+
+if __name__ == "__main__":
+    main()
