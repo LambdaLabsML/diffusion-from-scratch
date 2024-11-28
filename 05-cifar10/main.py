@@ -9,6 +9,7 @@ import torch
 import torchvision
 import torchvision.transforms.functional as F
 from matplotlib import pyplot as plt
+from torch.optim.swa_utils import get_ema_multi_avg_fn
 from torchvision.utils import make_grid
 from tqdm import trange
 
@@ -275,6 +276,9 @@ class EMA:
 def train(batch_size=128,
           epochs=80,
           lr=1e-3,
+          warmup=0,
+          grad_clip=None,
+          ema_decay=0.9999,
           model_channels=32,
           activation_fn=torch.nn.SiLU,
           num_res_blocks=2,
@@ -293,7 +297,7 @@ def train(batch_size=128,
                   dropout=dropout,
                   attention_resolutions=attention_resolutions)
     model = model.to(device)
-    ema = EMA(model)
+    ema = torch.optim.swa_utils.AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay))
 
     transforms = []
     if hflip:
@@ -306,6 +310,9 @@ def train(batch_size=128,
     dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = None
+    if warmup > 0:
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 1e-9, 1, total_iters=warmup)
     criterion = torch.nn.MSELoss()
 
     # Train
@@ -327,8 +334,12 @@ def train(batch_size=128,
             pred_noise = model(x_t, t)
             loss = criterion(pred_noise, noise)
             loss.backward()
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
-            ema.update()
+            if scheduler is not None:
+                scheduler.step()
+            ema.update_parameters(model)
             loss_epoch += loss.item()
             n += x.size(0)
         loss_epoch /= n
@@ -340,20 +351,13 @@ def train(batch_size=128,
         plot_loss(loss_history)
 
         torch.save(model.state_dict(), 'model.pth')
-        ema.apply_shadow()
-        torch.save(model.state_dict(), 'model-ema.pth')
-        ema.restore()
+        torch.save(ema.state_dict(), 'model-ema.pth')
 
         if save_checkpoints:
             # copy the to checkpoint folder
             shutil.copy('model.pth', f'checkpoints/model-{epoch:04d}.pth')
             shutil.copy('model-ema.pth', f'checkpoints/model-ema-{epoch:04d}.pth')
 
-    print(f"Epoch {epoch}, Loss {loss_epoch}, Time {time.time() - start}")
-    torch.save(model.state_dict(), 'part-i-cifar-full-model.pth')
-    ema.apply_shadow()
-    torch.save(model.state_dict(), 'part-i-cifar-full-model-ema.pth')
-    _test(device, noise_scheduler, model, epoch)
 
 def plot_loss(loss_history):
     with open('loss.csv', 'w') as f:
@@ -374,7 +378,6 @@ def plot_loss(loss_history):
     plt.grid()
     plt.savefig('loss.png')
     plt.close()
-    # plt.show()
 
 def _test(device, noise_scheduler, model, epoch=None, progress=False):
     # Use seed
@@ -401,7 +404,6 @@ def _test(device, noise_scheduler, model, epoch=None, progress=False):
     suffix = f"-{epoch:04d}" if epoch is not None else ""
     filename = f"output{suffix}.png"
     grid.save(filename)
-    # print(f"Image saved as {filename}")
     torch.seed() # Reset seed
 
 def test(model_channels=32,
@@ -430,6 +432,9 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
     parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
+    parser.add_argument('--grad-clip', type=float, default=None, help="Gradient clipping")
+    parser.add_argument('--warmup', type=int, default=0, help="Warmup steps")
+    parser.add_argument('--ema-decay', type=float, default=0.9999, help="Exponential moving average decay")
     parser.add_argument('--model-channels', type=int, default=128, help="Number of channels in the model")
     parser.add_argument('--activation', type=str, default='silu', choices=ACTIVATION_FUNCTIONS.keys(), help="Activation function")
     parser.add_argument('--num-res-blocks', type=int, default=2, help="Number of residual blocks")
@@ -449,6 +454,8 @@ if __name__ == "__main__":
         train(batch_size=args.batch_size,
               epochs=args.epochs,
               lr=args.lr,
+              grad_clip=args.grad_clip,
+              ema_decay=args.ema_decay,
               model_channels=args.model_channels,
               activation_fn=activation_fn,
               num_res_blocks=args.num_res_blocks,
