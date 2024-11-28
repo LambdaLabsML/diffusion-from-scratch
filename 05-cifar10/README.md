@@ -407,7 +407,7 @@ python part_f_cifar_hflips.py test --model-channels 32 --activation silu --num-r
 
 Our resulting output looks like this:
 
-![](assets/part-f-cifar-aug-output.png)
+![](assets/part-f-cifar-hflips-output.png)
 
 ## (G) Dropout
 
@@ -458,7 +458,7 @@ python part_f_cifar_hflips.py test --model-channels 32 --activation silu --num-r
 
 Our resulting output looks like this:
 
-![](assets/part-f-cifar-aug-output.png)
+![](assets/part-g-cifar-dropout-output.png)
 
 ## (H) Attention blocks
 

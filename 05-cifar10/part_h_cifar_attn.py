@@ -289,7 +289,7 @@ def train(batch_size=128,
         loss_epoch /= n
         print(f"Epoch {epoch}, Loss {loss_epoch}")
 
-    torch.save(model.state_dict(), 'part-g-cifar-attn-model.pth')
+    torch.save(model.state_dict(), 'part-h-cifar-attn-model.pth')
 
 def test(model_channels=32,
          activation_fn=torch.nn.SiLU,
@@ -305,7 +305,7 @@ def test(model_channels=32,
                   channel_mult=channel_mult,
                   dropout=dropout,
                   attention_resolutions=attention_resolutions)
-    model.load_state_dict(torch.load('part-g-cifar-attn-model.pth', weights_only=True))
+    model.load_state_dict(torch.load('part-h-cifar-attn-model.pth', weights_only=True))
     model = model.to(device)
     model.eval()
 
@@ -321,8 +321,8 @@ def test(model_channels=32,
     # Create an image grid
     grid = make_grid(x, nrow=8, padding=2)
     grid = F.to_pil_image(grid)
-    grid.save("part-g-cifar-attn-output.png")
-    print("Image saved as part-g-cifar-attn-output.png")
+    grid.save("part-h-cifar-attn-output.png")
+    print("Image saved as part-h-cifar-attn-output.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
