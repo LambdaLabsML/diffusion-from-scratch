@@ -107,7 +107,7 @@ dataset = [
     Dataset('mnist', partial(torchvision.datasets.MNIST, root='./data', train=True, download=True), 1, 28, 10),
     Dataset('cifar10', partial(torchvision.datasets.CIFAR10, root='./data', train=True, download=True), 3, 32, 10),
     Dataset('cifar100', partial(torchvision.datasets.CIFAR100, root='./data', train=True, download=True), 3, 32, 100),
-    Dataset('celeba', partial(CelebAHQ, root='./data/CelebAMask-HQ'), 3, 64, 40),
+    Dataset('celeba', partial(CelebAHQ, root='./data/CelebAMask-HQ'), 3, 1024, 1024),
 ]
 DATASETS = {d.name: d for d in dataset}
 
