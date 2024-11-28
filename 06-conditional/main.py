@@ -327,6 +327,9 @@ def train(batch_size=128,
     checkpoint_dir = os.path.join(output_dir, 'checkpoints')
     if save_checkpoints:
         os.makedirs(checkpoint_dir, exist_ok=True)
+    if log_interval != 0:
+        os.makedirs(os.path.join(output_dir, 'img'), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, 'img-ema'), exist_ok=True)
 
     start = time.time()
     loss_history = []
