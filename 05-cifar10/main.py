@@ -245,34 +245,6 @@ class Model(torch.nn.Module):
             x = module(x, emb)
         return self.out(x)
 
-class EMA:
-    def __init__(self, model, decay=0.9999):
-        self.model = model
-        self.decay = decay
-        self.shadow = {}
-        self.backup = {}
-
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] = param.data.clone()
-
-    def update(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] -= (1 - self.decay) * (self.shadow[name] - param.data)
-
-    def apply_shadow(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.backup[name] = param.data
-                param.data = self.shadow[name]
-
-    def restore(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                param.data = self.backup[name]
-        self.backup = {}
-
 def train(batch_size=128,
           epochs=80,
           lr=1e-3,
@@ -287,8 +259,10 @@ def train(batch_size=128,
           dropout=0.1,
           attention_resolutions=(2,),
           gpu=None,
-          save_checkpoints=True):
-    device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+          save_checkpoints=True,
+          log_interval=10,
+          output_dir='output'):
+    device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
     model = Model(model_channels=model_channels,
                   activation_fn=activation_fn,
@@ -316,8 +290,10 @@ def train(batch_size=128,
     criterion = torch.nn.MSELoss()
 
     # Train
+    os.makedirs(output_dir, exist_ok=True)
+    checkpoint_dir = os.path.join(output_dir, 'checkpoints')
     if save_checkpoints:
-        os.makedirs('checkpoints', exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
     start = time.time()
     loss_history = []
@@ -350,17 +326,26 @@ def train(batch_size=128,
         print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
         plot_loss(loss_history)
 
-        torch.save(model.state_dict(), 'model.pth')
-        torch.save(ema.state_dict(), 'model-ema.pth')
+        model_path = os.path.join(output_dir, 'model.pth')
+        ema_path = os.path.join(output_dir, 'model-ema.pth')
+        torch.save(model.state_dict(), model_path)
+        torch.save(ema.state_dict(), ema_path)
 
         if save_checkpoints:
             # copy the to checkpoint folder
-            shutil.copy('model.pth', f'checkpoints/model-{epoch:04d}.pth')
-            shutil.copy('model-ema.pth', f'checkpoints/model-ema-{epoch:04d}.pth')
+            shutil.copy(model_path, f'checkpoints/model-{epoch:04d}.pth')
+            shutil.copy(ema_path, f'checkpoints/model-ema-{epoch:04d}.pth')
+
+        if epoch % log_interval == 0:
+            file_path = os.path.join(output_dir, f'img/{epoch:04d}.png')
+            _test(device, noise_scheduler, model, file_path)
+            ema_file_path = os.path.join(output_dir, f'img-ema/{epoch:04d}.png')
+            _test(device, noise_scheduler, ema, ema_file_path)
 
 
-def plot_loss(loss_history):
-    with open('loss.csv', 'w') as f:
+def plot_loss(loss_history, output_dir='output'):
+    csv_path = os.path.join(output_dir, 'loss.csv')
+    with open(csv_path, 'w') as f:
         f.write('epoch,loss\n')
         for i, loss in enumerate(loss_history):
             f.write(f'{i+1},{loss}\n')
@@ -374,12 +359,11 @@ def plot_loss(loss_history):
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('Training Loss')
-    plt.legend()
     plt.grid()
-    plt.savefig('loss.png')
+    plt.savefig(os.path.join(output_dir, 'loss.png'))
     plt.close()
 
-def _test(device, noise_scheduler, model, epoch=None, progress=False):
+def _test(device, noise_scheduler, model, file_path="img.png", progress=False):
     # Use seed
     torch.manual_seed(0)
 
@@ -401,10 +385,8 @@ def _test(device, noise_scheduler, model, epoch=None, progress=False):
     # Create an image grid
     grid = make_grid(x, nrow=16, padding=2)
     grid = F.to_pil_image(grid)
-    suffix = f"-{epoch:04d}" if epoch is not None else ""
-    filename = f"output{suffix}.png"
-    grid.save(filename)
-    torch.seed() # Reset seed
+    grid.save(file_path)
+    torch.seed()  # Reset seed
 
 def test(model_channels=32,
          activation_fn=torch.nn.SiLU,
@@ -413,8 +395,9 @@ def test(model_channels=32,
          dropout=0.1,
          attention_resolutions=(2,),
          gpu=None,
-         model_path='model.pth'):
-    device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+         model_path='model.pth',
+         file_path='img.png'):
+    device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
     model = Model(model_channels=model_channels,
                   activation_fn=activation_fn,
@@ -423,8 +406,9 @@ def test(model_channels=32,
                   dropout=dropout,
                   attention_resolutions=attention_resolutions)
     model.load_state_dict(torch.load(model_path, weights_only=True))
+    model.to(device)
     model.eval()
-    _test(device, noise_scheduler, model, progress=True)
+    _test(device, noise_scheduler, model, file_path, progress=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
@@ -446,6 +430,9 @@ if __name__ == "__main__":
     parser.add_argument('--gpu', type=int, default=None, help="GPU index")
     parser.add_argument('--model', type=str, default='model.pth', help="Model file")
     parser.add_argument('--save-checkpoints', action='store_true', help="Save model checkpoints")
+    parser.add_argument('--log-interval', type=int, default=10, help="Image log interval")
+    parser.add_argument('--output-dir', type=str, default='output', help="Output directory")
+    parser.add_argument('--file-path', type=str, default='img.png', help="Output file path")
     args = parser.parse_args()
 
     activation_fn = ACTIVATION_FUNCTIONS[args.activation]
@@ -455,6 +442,7 @@ if __name__ == "__main__":
               epochs=args.epochs,
               lr=args.lr,
               grad_clip=args.grad_clip,
+              warmup=args.warmup,
               ema_decay=args.ema_decay,
               model_channels=args.model_channels,
               activation_fn=activation_fn,
@@ -464,7 +452,9 @@ if __name__ == "__main__":
               dropout=args.dropout,
               attention_resolutions=args.attention_resolutions,
               gpu=args.gpu,
-              save_checkpoints=args.save_checkpoints)
+              save_checkpoints=args.save_checkpoints,
+              log_interval=args.log_interval,
+              output_dir=args.output_dir)
     elif args.command == 'test':
         test(model_channels=args.model_channels,
              activation_fn=activation_fn,
@@ -473,4 +463,5 @@ if __name__ == "__main__":
              dropout=args.dropout,
              attention_resolutions=args.attention_resolutions,
              gpu=args.gpu,
-             model_path=args.model)
+             model_path=args.model,
+             file_path=args.file_path)
