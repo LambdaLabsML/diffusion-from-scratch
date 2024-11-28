@@ -326,7 +326,7 @@ def train(batch_size=128,
 
         formatted_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - start))
         print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
-        plot_loss(loss_history)
+        plot_loss(loss_history, output_dir)
 
         model_path = os.path.join(output_dir, 'model.pth')
         ema_path = os.path.join(output_dir, 'model-ema.pth')

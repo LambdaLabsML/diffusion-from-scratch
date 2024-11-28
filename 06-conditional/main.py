@@ -253,10 +253,13 @@ class Model(torch.nn.Module):
         emb = emb_t + emb_class
         hs = []
         for module in self.input_blocks:
+            print(x.shape, "input", module.__class__.__name__) # Debugging
             if isinstance(module, TimestepBlock):
                 x = module(x, emb)
+                print(x.shape, "output", module.__class__.__name__) # Debugging
             else:
                 x = module(x)
+                print(x.shape, "output", module.__class__.__name__) # Debugging
             hs.append(x)
         x = self.middle_block(x, emb)
         for module in self.output_blocks:
@@ -358,7 +361,7 @@ def train(batch_size=128,
 
         formatted_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - start))
         print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
-        plot_loss(loss_history)
+        plot_loss(loss_history, output_dir)
 
         model_path = os.path.join(output_dir, 'model.pth')
         ema_path = os.path.join(output_dir, 'model-ema.pth')
