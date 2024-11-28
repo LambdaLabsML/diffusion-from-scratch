@@ -518,34 +518,11 @@ For our final training, we'll make a couple final improvements to our model:
 We'll save an exponential moving average (EMA) of the model weights during training. This can reduce the noisiness of the weights, especially later in training
 
 ```python
-class EMA:
-    def __init__(self, model, decay=0.9999):
-        self.model = model
-        self.decay = decay
-        self.shadow = {}
-        self.backup = {}
-
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] = param.data.clone()
-
-    def update(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] -= (1 - self.decay) * (self.shadow[name] - param.data)
-
-    def apply_shadow(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.backup[name] = param.data
-                param.data = self.shadow[name]
-
-    def restore(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                param.data = self.backup[name]
-        self.backup = {}
+ema = torch.optim.swa_utils.AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay))
 ```
+
+
+
 
 We'll add a few more command-line args for training and inference
 ```python
@@ -557,7 +534,10 @@ We'll add a few more command-line args for training and inference
 We'll now train our final model with EMA, using the same configuration as the DDPM paper
 
 ```bash
-python main.py train --batch-size 128 --lr 2e-4 --epochs 2000 --hflip --model-channels 128 --activation silu --num-res-blocks 2 --channel-mult 2 2 2 1 --dropout 0.1 --attention_resolutions 2 --gpu 0 --save-checkpoints
+python main.py train --model-channels 128 --num-res-blocks 2 --channel-mult 1 2 2 2 --attention-resolutions 2 \
+  --batch-size 128 --lr 2e-4 --epochs 2000 --dropout 0.1 --hflip --grad-clip 1 --warmup 5000 \
+  --gpu 0 --save-checkpoints --log-interval 1 --output-dir cifar-unconditional
+
 ```
 
 After training, we can sample a grid of images from the model with:

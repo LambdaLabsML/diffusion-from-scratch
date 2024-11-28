@@ -218,6 +218,8 @@ class Model(torch.nn.Module):
             for i in range(num_res_blocks + 1):
                 in_ch = out_ch + channels.pop()
                 out_ch = model_channels * mult
+                if level == len(channel_mult) - 1 and i == num_res_blocks:
+                    out_ch = model_channels
                 block = TimestepBlockSequential(ResnetBlock(in_ch, out_ch, embed_dim, activation_fn, dropout))
                 if i == num_res_blocks and level < len(channel_mult) - 1:
                     block.append(Upsample(out_ch, out_ch))
@@ -435,6 +437,40 @@ def info(batch_size=128,
                   channel_mult=channel_mult,
                   dropout=dropout,
                   attention_resolutions=attention_resolutions)
+    model = model.to(device)
+
+    x, t = torch.randn(1, 3, 32, 32, device=device), torch.tensor(0, device=device)
+    emb = model.embed(t)
+    hs = []
+    res_in = x.shape[-1]
+    print("Input Blocks")
+    for module in model.input_blocks:
+        print(f"{' -':<3}{list(x.shape)} -> ", end='')
+        if isinstance(module, TimestepBlock):
+            x = module(x, emb)
+        else:
+            x = module(x)
+        print(f"{x.shape} {module}")
+        hs.append(x)
+        if res_in != x.shape[-1]:
+            print("-"*10)
+            res_in = x.shape[-1]
+
+    print("Middle Block")
+    print(f"{x.shape} -> ", end='')
+    x = model.middle_block(x, emb)
+    print(f"{x.shape} {model.middle_block}")
+    print("Output Blocks")
+    for module in model.output_blocks:
+        h = hs.pop()
+        print(f"{list(x.shape)} {list(h.shape)} -> ", end='')
+        x = torch.cat([x, h], 1)
+        x = module(x, emb)
+        print(f"{list(x.shape)} {module}")
+        if res_in != x.shape[-1]:
+            print("-"*10)
+            res_in = x.shape[-1]
+    model.out(x)
 
     import torchinfo
     input_data = (torch.randn(1, 3, 32, 32, device=device), torch.tensor(0, device=device))
