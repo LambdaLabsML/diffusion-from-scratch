@@ -367,12 +367,12 @@ def _test(device, noise_scheduler, model, file_path="img.png", progress=False):
     # Use seed
     torch.manual_seed(0)
 
-    x = torch.randn(256, 3, 32, 32).to(device)
-
     if progress:
         steps = trange(noise_scheduler.steps-1, -1, -1)
     else:
         steps = range(noise_scheduler.steps-1, -1, -1)
+
+    x = torch.randn(256, 3, 32, 32).to(device)
 
     for step in steps:
         with torch.no_grad():
