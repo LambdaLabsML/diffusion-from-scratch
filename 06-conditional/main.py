@@ -96,7 +96,7 @@ CONFIGS = {
         '--hflip',
         '--save-checkpoints',
         '--log-interval', '1',
-        '--resolution', '64',
+        '--resolution', '128',
         '--progress',
     ],
     'celeba-256': [
@@ -116,7 +116,7 @@ CONFIGS = {
         '--hflip',
         '--save-checkpoints',
         '--log-interval', '1',
-        '--resolution', '64',
+        '--resolution', '256',
         '--progress',
     ],
     'mnist': [
