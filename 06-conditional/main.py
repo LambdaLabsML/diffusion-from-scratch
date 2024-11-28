@@ -62,6 +62,7 @@ CONFIGS = {
     'celeba-64': [
         'train',
         '--dataset', 'celeba',
+        '--resolution', '64',
         '--batch-size', '64',
         '--grad-clip', '1',
         '--lr', '2e-5',
@@ -76,12 +77,12 @@ CONFIGS = {
         '--hflip',
         '--save-checkpoints',
         '--log-interval', '1',
-        '--resolution', '64',
         '--progress',
     ],
     'celeba-128': [
         'train',
         '--dataset', 'celeba',
+        '--resolution', '128',
         '--batch-size', '64',
         '--grad-clip', '1',
         '--lr', '2e-5',
@@ -96,12 +97,12 @@ CONFIGS = {
         '--hflip',
         '--save-checkpoints',
         '--log-interval', '1',
-        '--resolution', '128',
         '--progress',
     ],
     'celeba-256': [
         'train',
         '--dataset', 'celeba',
+        '--resolution', '256',
         '--batch-size', '16',
         '--grad-clip', '1',
         '--lr', '5e-6',
@@ -116,7 +117,6 @@ CONFIGS = {
         '--hflip',
         '--save-checkpoints',
         '--log-interval', '1',
-        '--resolution', '256',
         '--progress',
     ],
     'mnist': [
