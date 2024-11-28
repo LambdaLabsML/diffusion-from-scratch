@@ -296,6 +296,9 @@ def train(batch_size=128,
     checkpoint_dir = os.path.join(output_dir, 'checkpoints')
     if save_checkpoints:
         os.makedirs(checkpoint_dir, exist_ok=True)
+    if log_interval != 0:
+        os.makedirs(os.path.join(output_dir, 'img'), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, 'img-ema'), exist_ok=True)
 
     start = time.time()
     loss_history = []
@@ -334,11 +337,11 @@ def train(batch_size=128,
         torch.save(ema.state_dict(), ema_path)
 
         if save_checkpoints:
-            # copy the to checkpoint folder
-            shutil.copy(model_path, f'checkpoints/model-{epoch:04d}.pth')
-            shutil.copy(ema_path, f'checkpoints/model-ema-{epoch:04d}.pth')
+            # copy to the checkpoint folder
+            shutil.copy(model_path, os.path.join(checkpoint_dir, f'model-{epoch:04d}.pth'))
+            shutil.copy(ema_path, os.path.join(checkpoint_dir, f'model-ema-{epoch:04d}.pth'))
 
-        if epoch % log_interval == 0:
+        if log_interval != 0 and epoch % log_interval == 0:
             file_path = os.path.join(output_dir, f'img/{epoch:04d}.png')
             _test(device, noise_scheduler, model, file_path)
             ema_file_path = os.path.join(output_dir, f'img-ema/{epoch:04d}.png')

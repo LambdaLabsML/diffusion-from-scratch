@@ -195,6 +195,7 @@ class Model(torch.nn.Module):
                  num_classes=10,
                  conditional=True):
         super(Model, self).__init__()
+        self.conditional = conditional
 
         embed_dim = model_channels * 4
         self.embed = torch.nn.Sequential(
@@ -204,7 +205,7 @@ class Model(torch.nn.Module):
             torch.nn.Linear(embed_dim, embed_dim),
         )
 
-        if conditional:
+        if self.conditional:
             self.class_emb = torch.nn.Embedding(num_classes, embed_dim)
 
         self.input_blocks = torch.nn.ModuleList([torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
@@ -247,19 +248,18 @@ class Model(torch.nn.Module):
             torch.nn.Conv2d(model_channels, image_channels, kernel_size=3, padding=1)
         )
 
-    def forward(self, x, t, class_idx):
-        emb_t = self.embed(t)
-        emb_class = self.class_emb(class_idx)
-        emb = emb_t + emb_class
+    def forward(self, x, t, class_idx=None):
+        emb = self.embed(t)
+
+        if self.conditional:
+            emb_class = self.class_emb(class_idx)
+            emb = emb + emb_class
         hs = []
         for module in self.input_blocks:
-            print(x.shape, "input", module.__class__.__name__) # Debugging
             if isinstance(module, TimestepBlock):
                 x = module(x, emb)
-                print(x.shape, "output", module.__class__.__name__) # Debugging
             else:
                 x = module(x)
-                print(x.shape, "output", module.__class__.__name__) # Debugging
             hs.append(x)
         x = self.middle_block(x, emb)
         for module in self.output_blocks:
@@ -472,7 +472,9 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
     parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
-    parser.add_argument('--image-channels', type=int, default=3, help="Number of image channels")
+    parser.add_argument('--grad-clip', type=float, default=None, help="Gradient clipping")
+    parser.add_argument('--warmup', type=int, default=0, help="Warmup steps")
+    parser.add_argument('--ema-decay', type=float, default=0.9999, help="Exponential moving average decay")
     parser.add_argument('--model-channels', type=int, default=128, help="Number of channels in the model")
     parser.add_argument('--activation', type=str, default='silu', choices=ACTIVATION_FUNCTIONS.keys(), help="Activation function")
     parser.add_argument('--num-res-blocks', type=int, default=2, help="Number of residual blocks")
@@ -496,6 +498,9 @@ if __name__ == "__main__":
         train(batch_size=args.batch_size,
               epochs=args.epochs,
               lr=args.lr,
+              grad_clip=args.grad_clip,
+              warmup=args.warmup,
+              ema_decay=args.ema_decay,
               model_channels=args.model_channels,
               activation_fn=activation_fn,
               num_res_blocks=args.num_res_blocks,
