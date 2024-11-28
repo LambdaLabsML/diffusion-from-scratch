@@ -180,7 +180,7 @@ class Model(torch.nn.Module):
                  channel_mult=(1, 2, 2, 2),
                  dropout=0.1,
                  attention_resolutions=(2,),
-                 num_classes=10):
+                 clip_embed_dim=512):
         super(Model, self).__init__()
 
         embed_dim = model_channels * 4
@@ -191,7 +191,11 @@ class Model(torch.nn.Module):
             torch.nn.Linear(embed_dim, embed_dim),
         )
 
-        self.class_emb = torch.nn.Embedding(num_classes, embed_dim)
+        self.clip_embed = torch.nn.Sequential(
+            torch.nn.Linear(clip_embed_dim, embed_dim),
+            activation_fn(),
+            torch.nn.Linear(embed_dim, embed_dim),
+        )
 
         self.input_blocks = torch.nn.ModuleList([torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
         channels = [model_channels]
@@ -229,25 +233,25 @@ class Model(torch.nn.Module):
             torch.nn.GroupNorm(32, model_channels),
             activation_fn(),
             torch.nn.Conv2d(model_channels, image_channels, kernel_size=3, padding=1)
-)
+        )
 
-def forward(self, x, t, class_idx):
-    emb_t = self.embed(t)
-    emb_class = self.class_emb(class_idx)
-    emb = emb_t + emb_class
-    hs = []
-    for module in self.input_blocks:
-        if isinstance(module, TimestepBlock):
+    def forward(self, x, t, clip_features):
+        emb_t = self.embed(t)
+        emb_cond = self.clip_embed(clip_features)
+        emb = emb_t + emb_cond
+        hs = []
+        for module in self.input_blocks:
+            if isinstance(module, TimestepBlock):
+                x = module(x, emb)
+            else:
+                x = module(x)
+            hs.append(x)
+        x = self.middle_block(x, emb)
+        for module in self.output_blocks:
+            h = hs.pop()
+            x = torch.cat([x, h], 1)
             x = module(x, emb)
-        else:
-            x = module(x)
-        hs.append(x)
-    x = self.middle_block(x, emb)
-    for module in self.output_blocks:
-        h = hs.pop()
-        x = torch.cat([x, h], 1)
-        x = module(x, emb)
-    return self.out(x)
+        return self.out(x)
 
 class EMA:
     def __init__(self, model, decay=0.9999):
@@ -277,9 +281,19 @@ class EMA:
                 param.data = self.backup[name]
         self.backup = {}
 
+class CIFAR10Clip(torchvision.datasets.CIFAR10):
+    def __init__(self, clip_embeddings="cifar10.pt", **kwargs):
+        super().__init__(**kwargs)
+        self.clip_embeddings = torch.load(clip_embeddings, weights_only=True)
+
+    def __getitem__(self, index):
+        image, label = super().__getitem__(index)
+        return image, label, self.clip_embeddings[index]
+
 def train(batch_size=128,
           epochs=80,
           lr=1e-3,
+          image_channels=3,
           model_channels=32,
           activation_fn=torch.nn.SiLU,
           num_res_blocks=2,
@@ -291,7 +305,8 @@ def train(batch_size=128,
           save_checkpoints=True):
     device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
-    model = Model(model_channels=model_channels,
+    model = Model(image_channels=image_channels,
+                  model_channels=model_channels,
                   activation_fn=activation_fn,
                   num_res_blocks=num_res_blocks,
                   channel_mult=channel_mult,
@@ -308,14 +323,17 @@ def train(batch_size=128,
         normalize
     ])
     transform = torchvision.transforms.Compose(transforms)
-    dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    dataset = CIFAR10Clip(root='./data', train=True, download=True, transform=transform)
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = torch.nn.MSELoss()
 
     # Train
+    output_dir = 'cifar-clip'
+    os.makedirs(output_dir, exist_ok=True)
+    checkpoint_dir = os.path.join(output_dir, 'checkpoints')
     if save_checkpoints:
-        os.makedirs('checkpoints', exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
     start = time.time()
     loss_history = []
@@ -323,14 +341,14 @@ def train(batch_size=128,
         model.train()
         loss_epoch = 0
         n = 0
-        for x, cls in data_loader:
+        for x, _, clip_emb in data_loader:
             x = x.to(device)
-            cls = cls.to(device)
+            clip_emb = clip_emb.to(torch.float32).to(device)
             optimizer.zero_grad()
             noise = torch.randn_like(x, device=device)
             t = torch.randint(0, noise_scheduler.steps, (x.size(0),), device=device)
             x_t = noise_scheduler.add_noise(x, t, noise)
-            pred_noise = model(x_t, t, cls)
+            pred_noise = model(x_t, t, clip_emb)
             loss = criterion(pred_noise, noise)
             loss.backward()
             optimizer.step()
@@ -345,24 +363,27 @@ def train(batch_size=128,
         print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
         plot_loss(loss_history)
 
-        torch.save(model.state_dict(), 'model.pth')
+        model_path = os.path.join(output_dir, 'model.pth')
+        torch.save(model.state_dict(), model_path)
         ema.apply_shadow()
-        torch.save(model.state_dict(), 'model-ema.pth')
+        model_path_ema = os.path.join(output_dir, 'model-ema.pth')
+        torch.save(model.state_dict(), model_path_ema)
         ema.restore()
 
         if save_checkpoints:
-            # copy the to checkpoint folder
-            shutil.copy('model.pth', f'checkpoints/model-{epoch:04d}.pth')
-            shutil.copy('model-ema.pth', f'checkpoints/model-ema-{epoch:04d}.pth')
+            # copy to checkpoint folder
+            shutil.copy(model_path, os.path.join(checkpoint_dir, f'model-{epoch:04d}.pth'))
+            shutil.copy(model_path_ema, os.path.join(checkpoint_dir, f'model-ema-{epoch:04d}.pth'))
 
     print(f"Epoch {epoch}, Loss {loss_epoch}, Time {time.time() - start}")
-    torch.save(model.state_dict(), 'part-i-cifar-full-model.pth')
+    torch.save(model.state_dict(), os.path.join(output_dir, 'model.pth'))
     ema.apply_shadow()
-    torch.save(model.state_dict(), 'part-i-cifar-full-model-ema.pth')
+    torch.save(model.state_dict(), os.path.join(output_dir, 'model-ema.pth'))
     _test(device, noise_scheduler, model, epoch)
 
-def plot_loss(loss_history):
-    with open('cifar-output/output/part-a-cifar-conditional-loss.csv', 'w') as f:
+def plot_loss(loss_history, output_dir='cifar-clip'):
+    csv_path = os.path.join(output_dir, 'loss.csv')
+    with open(csv_path, 'w') as f:
         f.write('epoch,loss\n')
         for i, loss in enumerate(loss_history):
             f.write(f'{i+1},{loss}\n')
@@ -378,17 +399,27 @@ def plot_loss(loss_history):
     plt.title('Training Loss')
     plt.legend()
     plt.grid()
-    plt.savefig('loss.png')
+    plt.savefig(os.path.join(output_dir, 'loss.png'))
     plt.close()
     # plt.show()
 
-def _test(device, noise_scheduler, model, epoch=None, progress=False, ema=False):
+def _test(device, noise_scheduler, model, epoch=None, progress=False, ema=False, output_dir='cifar-clip'):
     # Use seed
     torch.manual_seed(0)
 
     x = torch.randn(100, 3, 32, 32).to(device)
-    # grid of classes, 10x 0-9 e.g.: [0, 0, ..., 0, 1, 1, ..., 1, ..., 9, 9, ..., 9]
-    classes = torch.arange(10).repeat_interleave(10).to(device)
+
+    dataset = CIFAR10Clip(root='./data', train=False, download=True)
+
+    import clip
+    clip_model, _ = clip.load('ViT-B/32', device=device)
+    texts = [f"a photo of a{adj}{c}" for c in dataset.classes for adj in [" ", " red ", " yellow ", " green ", " blue "]]
+    text_inputs = clip.tokenize(texts).to(device)
+    # Calculate features
+    with torch.no_grad():
+        text_features = clip_model.encode_text(text_inputs)
+    text_features /= text_features.norm(dim=-1, keepdim=True)
+    text_features = text_features.repeat_interleave(2, dim=0).to(torch.float32)
 
     if progress:
         steps = trange(noise_scheduler.steps-1, -1, -1)
@@ -398,7 +429,7 @@ def _test(device, noise_scheduler, model, epoch=None, progress=False, ema=False)
     for step in steps:
         with torch.no_grad():
             t = torch.tensor(step, device=device).expand(x.size(0),)
-            pred_noise = model(x, t, classes)
+            pred_noise = model(x, t, text_features)
             x = noise_scheduler.sample_prev_step(x, t, pred_noise)
 
     x = denormalize(x).clamp(0, 1)
@@ -406,17 +437,16 @@ def _test(device, noise_scheduler, model, epoch=None, progress=False, ema=False)
     # Create an image grid
     grid = make_grid(x, nrow=10, padding=2)
     grid = F.to_pil_image(grid)
-    output_dir = 'cifar-output/output'
-    if ema:
-        output_dir += "-ema"
+    output_dir = os.path.join(output_dir, 'output' + ('-ema' if ema else ''))
     os.makedirs(output_dir, exist_ok=True)
     suffix = f"-{epoch:04d}" if epoch is not None else ""
-    filename = f"part-a-cifar-conditional-output{suffix}.png"
+    filename = f"img{suffix}.png"
     grid.save(os.path.join(output_dir, filename))
     # print(f"Image saved as {filename}")
     torch.seed() # Reset seed
 
-def test(model_channels=32,
+def test(image_channels=3,
+         model_channels=32,
          activation_fn=torch.nn.SiLU,
          num_res_blocks=2,
          channel_mult=(1, 2, 2, 2),
@@ -426,7 +456,8 @@ def test(model_channels=32,
          model_path='model.pth'):
     device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
-    model = Model(model_channels=model_channels,
+    model = Model(image_channels=image_channels,
+                  model_channels=model_channels,
                   activation_fn=activation_fn,
                   num_res_blocks=num_res_blocks,
                   channel_mult=channel_mult,
@@ -463,7 +494,7 @@ if __name__ == "__main__":
         train(batch_size=args.batch_size,
               epochs=args.epochs,
               lr=args.lr,
-              image_channels=3,
+              image_channels=args.image_channels,
               model_channels=args.model_channels,
               activation_fn=activation_fn,
               num_res_blocks=args.num_res_blocks,
@@ -474,7 +505,8 @@ if __name__ == "__main__":
               gpu=args.gpu,
               save_checkpoints=args.save_checkpoints)
     elif args.command == 'test':
-        test(model_channels=args.model_channels,
+        test(image_channels=args.image_channels,
+             model_channels=args.model_channels,
              activation_fn=activation_fn,
              num_res_blocks=args.num_res_blocks,
              channel_mult=args.channel_mult,
