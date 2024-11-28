@@ -229,25 +229,25 @@ class Model(torch.nn.Module):
             torch.nn.GroupNorm(32, model_channels),
             activation_fn(),
             torch.nn.Conv2d(model_channels, image_channels, kernel_size=3, padding=1)
-)
+        )
 
-def forward(self, x, t, class_idx):
-    emb_t = self.embed(t)
-    emb_class = self.class_emb(class_idx)
-    emb = emb_t + emb_class
-    hs = []
-    for module in self.input_blocks:
-        if isinstance(module, TimestepBlock):
+    def forward(self, x, t, class_idx):
+        emb_t = self.embed(t)
+        emb_class = self.class_emb(class_idx)
+        emb = emb_t + emb_class
+        hs = []
+        for module in self.input_blocks:
+            if isinstance(module, TimestepBlock):
+                x = module(x, emb)
+            else:
+                x = module(x)
+            hs.append(x)
+        x = self.middle_block(x, emb)
+        for module in self.output_blocks:
+            h = hs.pop()
+            x = torch.cat([x, h], 1)
             x = module(x, emb)
-        else:
-            x = module(x)
-        hs.append(x)
-    x = self.middle_block(x, emb)
-    for module in self.output_blocks:
-        h = hs.pop()
-        x = torch.cat([x, h], 1)
-        x = module(x, emb)
-    return self.out(x)
+        return self.out(x)
 
 class EMA:
     def __init__(self, model, decay=0.9999):
@@ -463,7 +463,6 @@ if __name__ == "__main__":
         train(batch_size=args.batch_size,
               epochs=args.epochs,
               lr=args.lr,
-              image_channels=3,
               model_channels=args.model_channels,
               activation_fn=activation_fn,
               num_res_blocks=args.num_res_blocks,
