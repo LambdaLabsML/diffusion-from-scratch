@@ -458,9 +458,9 @@ def train(batch_size=128,
 
         if log_interval != 0 and epoch % log_interval == 0:
             file_path = os.path.join(output_dir, f'img/{epoch:04d}.png')
-            _test(device, noise_scheduler, model, file_path)
+            _test(device, noise_scheduler, model, file_path, dataset=dataset.name, resolution=resolution, conditional=conditional)
             ema_file_path = os.path.join(output_dir, f'img-ema/{epoch:04d}.png')
-            _test(device, noise_scheduler, ema, ema_file_path)
+            _test(device, noise_scheduler, ema, ema_file_path, dataset=dataset.name, resolution=resolution, conditional=conditional)
 
 def plot_loss(loss_history, output_dir='output'):
     csv_path = os.path.join(output_dir, 'loss.csv')
@@ -482,7 +482,7 @@ def plot_loss(loss_history, output_dir='output'):
     plt.savefig(os.path.join(output_dir, 'loss.png'))
     plt.close()
 
-def _test(device, noise_scheduler, model, file_path="img.png", progress=False, dataset='cifar10', conditional=True):
+def _test(device, noise_scheduler, model, file_path="img.png", progress=False, dataset='cifar10', resolution=None, conditional=True):
     # Use seed
     torch.manual_seed(0)
     dataset = DATASETS[dataset]
@@ -497,7 +497,7 @@ def _test(device, noise_scheduler, model, file_path="img.png", progress=False, d
     elif conditional:
         raise ValueError(f"Conditional model is not supported for {dataset.name}")
 
-    x = torch.randn(n, dataset.image_channels, dataset.resolution, dataset.resolution, device=device)
+    x = torch.randn(n, dataset.image_channels, resolution, resolution, device=device)
 
     if progress:
         steps = trange(noise_scheduler.steps-1, -1, -1)
@@ -610,4 +610,5 @@ if __name__ == "__main__":
              model_path=args.model,
              file_path=args.file_path,
              dataset=args.dataset,
-             conditional=args.conditional)
+             conditional=args.conditional,
+             resolution=args.resolution)
