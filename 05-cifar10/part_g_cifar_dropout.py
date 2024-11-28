@@ -187,6 +187,8 @@ class Model(torch.nn.Module):
             for i in range(num_res_blocks + 1):
                 in_ch = out_ch + channels.pop()
                 out_ch = model_channels * mult
+                if level == len(channel_mult) - 1 and i == num_res_blocks:
+                    out_ch = model_channels
                 block = TimestepBlockSequential(ResnetBlock(in_ch, out_ch, embed_dim, activation_fn, dropout))
                 if i == num_res_blocks and level < len(channel_mult) - 1:
                     block.append(Upsample(out_ch, out_ch))

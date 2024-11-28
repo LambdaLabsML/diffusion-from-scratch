@@ -4,11 +4,14 @@ import os
 import shutil
 import time
 from abc import abstractmethod
+from collections import namedtuple
+from functools import partial
 
 import torch
 import torchvision
 import torchvision.transforms.functional as F
 from matplotlib import pyplot as plt
+from torch.optim.swa_utils import get_ema_multi_avg_fn
 from torchvision.utils import make_grid
 from tqdm import trange
 
@@ -18,6 +21,15 @@ ACTIVATION_FUNCTIONS = {
     'leakyrelu': torch.nn.LeakyReLU,
     'gelu': torch.nn.GELU,
 }
+
+Dataset = namedtuple('Dataset', ('name', 'cls', 'image_channels', 'resolution', 'num_classes'))
+dataset = [
+    Dataset('mnist', partial(torchvision.datasets.MNIST, root='./data', train=True, download=True), 1, 28, 10),
+    Dataset('cifar10', partial(torchvision.datasets.CIFAR10, root='./data', train=True, download=True), 3, 32, 10),
+    Dataset('cifar100', partial(torchvision.datasets.CIFAR100, root='./data', train=True, download=True), 3, 32, 100),
+    Dataset('celeba', partial(torchvision.datasets.CelebA, root='./data', split='train', download=True), 3, 64, 40),
+]
+DATASETS = {d.name: d for d in dataset}
 
 class NoiseScheduler(torch.nn.Module):
     def __init__(self, steps=1000, beta_start=1e-4, beta_end=0.02):
@@ -180,7 +192,8 @@ class Model(torch.nn.Module):
                  channel_mult=(1, 2, 2, 2),
                  dropout=0.1,
                  attention_resolutions=(2,),
-                 num_classes=10):
+                 num_classes=10,
+                 conditional=True):
         super(Model, self).__init__()
 
         embed_dim = model_channels * 4
@@ -191,7 +204,8 @@ class Model(torch.nn.Module):
             torch.nn.Linear(embed_dim, embed_dim),
         )
 
-        self.class_emb = torch.nn.Embedding(num_classes, embed_dim)
+        if conditional:
+            self.class_emb = torch.nn.Embedding(num_classes, embed_dim)
 
         self.input_blocks = torch.nn.ModuleList([torch.nn.Conv2d(image_channels, model_channels, kernel_size=3, padding=1)])
         channels = [model_channels]
@@ -220,6 +234,8 @@ class Model(torch.nn.Module):
             for i in range(num_res_blocks + 1):
                 in_ch = out_ch + channels.pop()
                 out_ch = model_channels * mult
+                if level == len(channel_mult) - 1 and i == num_res_blocks:
+                    out_ch = model_channels
                 block = TimestepBlockSequential(ResnetBlock(in_ch, out_ch, embed_dim, activation_fn, dropout))
                 if i == num_res_blocks and level < len(channel_mult) - 1:
                     block.append(Upsample(out_ch, out_ch))
@@ -249,37 +265,12 @@ class Model(torch.nn.Module):
             x = module(x, emb)
         return self.out(x)
 
-class EMA:
-    def __init__(self, model, decay=0.9999):
-        self.model = model
-        self.decay = decay
-        self.shadow = {}
-        self.backup = {}
-
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] = param.data.clone()
-
-    def update(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.shadow[name] -= (1 - self.decay) * (self.shadow[name] - param.data)
-
-    def apply_shadow(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                self.backup[name] = param.data
-                param.data = self.shadow[name]
-
-    def restore(self):
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                param.data = self.backup[name]
-        self.backup = {}
-
 def train(batch_size=128,
           epochs=80,
           lr=1e-3,
+          warmup=0,
+          grad_clip=None,
+          ema_decay=0.9999,
           model_channels=32,
           activation_fn=torch.nn.SiLU,
           num_res_blocks=2,
@@ -288,19 +279,31 @@ def train(batch_size=128,
           dropout=0.1,
           attention_resolutions=(2,),
           gpu=None,
-          save_checkpoints=True):
-    device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+          save_checkpoints=True,
+          log_interval=10,
+          output_dir='output',
+          dataset='cifar10',
+          conditional=True,
+          resolution=None):
+    device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
+    dataset = DATASETS[dataset]
     noise_scheduler = NoiseScheduler().to(device)
-    model = Model(model_channels=model_channels,
+    model = Model(image_channels=dataset.image_channels,
+                  model_channels=model_channels,
                   activation_fn=activation_fn,
                   num_res_blocks=num_res_blocks,
                   channel_mult=channel_mult,
                   dropout=dropout,
-                  attention_resolutions=attention_resolutions)
+                  attention_resolutions=attention_resolutions,
+                  num_classes=dataset.num_classes,
+                  conditional=conditional)
     model = model.to(device)
-    ema = EMA(model)
+    ema = torch.optim.swa_utils.AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay))
 
     transforms = []
+    resolution = resolution or dataset.resolution
+    if resolution != dataset.resolution:
+        transforms.append(torchvision.transforms.Resize(resolution))
     if hflip:
         transforms.append(torchvision.transforms.RandomHorizontalFlip())
     transforms.extend([
@@ -308,14 +311,19 @@ def train(batch_size=128,
         normalize
     ])
     transform = torchvision.transforms.Compose(transforms)
-    dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    dataset = dataset.cls(root='./data', train=True, download=True, transform=transform)
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = None
+    if warmup > 0:
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 1e-9, 1, total_iters=warmup)
     criterion = torch.nn.MSELoss()
 
     # Train
+    os.makedirs(output_dir, exist_ok=True)
+    checkpoint_dir = os.path.join(output_dir, 'checkpoints')
     if save_checkpoints:
-        os.makedirs('checkpoints', exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
     start = time.time()
     loss_history = []
@@ -330,11 +338,18 @@ def train(batch_size=128,
             noise = torch.randn_like(x, device=device)
             t = torch.randint(0, noise_scheduler.steps, (x.size(0),), device=device)
             x_t = noise_scheduler.add_noise(x, t, noise)
-            pred_noise = model(x_t, t, cls)
+            if conditional:
+                pred_noise = model(x_t, t, cls)
+            else:
+                pred_noise = model(x_t, t)
             loss = criterion(pred_noise, noise)
             loss.backward()
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
-            ema.update()
+            if scheduler is not None:
+                scheduler.step()
+            ema.update_parameters(model)
             loss_epoch += loss.item()
             n += x.size(0)
         loss_epoch /= n
@@ -345,24 +360,25 @@ def train(batch_size=128,
         print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
         plot_loss(loss_history)
 
-        torch.save(model.state_dict(), 'model.pth')
-        ema.apply_shadow()
-        torch.save(model.state_dict(), 'model-ema.pth')
-        ema.restore()
+        model_path = os.path.join(output_dir, 'model.pth')
+        ema_path = os.path.join(output_dir, 'model-ema.pth')
+        torch.save(model.state_dict(), model_path)
+        torch.save(ema.state_dict(), ema_path)
 
         if save_checkpoints:
             # copy the to checkpoint folder
-            shutil.copy('model.pth', f'checkpoints/model-{epoch:04d}.pth')
-            shutil.copy('model-ema.pth', f'checkpoints/model-ema-{epoch:04d}.pth')
+            shutil.copy(model_path, f'checkpoints/model-{epoch:04d}.pth')
+            shutil.copy(ema_path, f'checkpoints/model-ema-{epoch:04d}.pth')
 
-    print(f"Epoch {epoch}, Loss {loss_epoch}, Time {time.time() - start}")
-    torch.save(model.state_dict(), 'part-i-cifar-full-model.pth')
-    ema.apply_shadow()
-    torch.save(model.state_dict(), 'part-i-cifar-full-model-ema.pth')
-    _test(device, noise_scheduler, model, epoch)
+        if epoch % log_interval == 0:
+            file_path = os.path.join(output_dir, f'img/{epoch:04d}.png')
+            _test(device, noise_scheduler, model, file_path)
+            ema_file_path = os.path.join(output_dir, f'img-ema/{epoch:04d}.png')
+            _test(device, noise_scheduler, ema, ema_file_path)
 
-def plot_loss(loss_history):
-    with open('cifar-output/output/part-a-cifar-conditional-loss.csv', 'w') as f:
+def plot_loss(loss_history, output_dir='output'):
+    csv_path = os.path.join(output_dir, 'loss.csv')
+    with open(csv_path, 'w') as f:
         f.write('epoch,loss\n')
         for i, loss in enumerate(loss_history):
             f.write(f'{i+1},{loss}\n')
@@ -376,19 +392,26 @@ def plot_loss(loss_history):
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('Training Loss')
-    plt.legend()
     plt.grid()
-    plt.savefig('loss.png')
+    plt.savefig(os.path.join(output_dir, 'loss.png'))
     plt.close()
-    # plt.show()
 
-def _test(device, noise_scheduler, model, epoch=None, progress=False, ema=False):
+def _test(device, noise_scheduler, model, file_path="img.png", progress=False, dataset='cifar10', conditional=True):
     # Use seed
     torch.manual_seed(0)
+    dataset = DATASETS[dataset]
+    n, nr = 256, 16
+    classes = None
+    if conditional and dataset.name in ['cifar10', 'mnist']:
+        n, nr = 100, 10
+        classes = torch.arange(10).repeat_interleave(10).to(device)
+    elif conditional and dataset.name == 'cifar100':
+        n, nr = 100, 10
+        classes = torch.arange(100).to(device)
+    elif conditional:
+        raise ValueError(f"Conditional model is not supported for {dataset.name}")
 
-    x = torch.randn(100, 3, 32, 32).to(device)
-    # grid of classes, 10x 0-9 e.g.: [0, 0, ..., 0, 1, 1, ..., 1, ..., 9, 9, ..., 9]
-    classes = torch.arange(10).repeat_interleave(10).to(device)
+    x = torch.randn(n, dataset.image_channels, dataset.resolution, dataset.resolution, device=device)
 
     if progress:
         steps = trange(noise_scheduler.steps-1, -1, -1)
@@ -398,23 +421,19 @@ def _test(device, noise_scheduler, model, epoch=None, progress=False, ema=False)
     for step in steps:
         with torch.no_grad():
             t = torch.tensor(step, device=device).expand(x.size(0),)
-            pred_noise = model(x, t, classes)
+            if conditional:
+                pred_noise = model(x, t, classes)
+            else:
+                pred_noise = model(x, t)
             x = noise_scheduler.sample_prev_step(x, t, pred_noise)
 
     x = denormalize(x).clamp(0, 1)
 
     # Create an image grid
-    grid = make_grid(x, nrow=10, padding=2)
+    grid = make_grid(x, nrow=nr, padding=2)
     grid = F.to_pil_image(grid)
-    output_dir = 'cifar-output/output'
-    if ema:
-        output_dir += "-ema"
-    os.makedirs(output_dir, exist_ok=True)
-    suffix = f"-{epoch:04d}" if epoch is not None else ""
-    filename = f"part-a-cifar-conditional-output{suffix}.png"
-    grid.save(os.path.join(output_dir, filename))
-    # print(f"Image saved as {filename}")
-    torch.seed() # Reset seed
+    grid.save(file_path)
+    torch.seed()  # Reset seed
 
 def test(model_channels=32,
          activation_fn=torch.nn.SiLU,
@@ -423,23 +442,30 @@ def test(model_channels=32,
          dropout=0.1,
          attention_resolutions=(2,),
          gpu=None,
-         model_path='model.pth'):
-    device = torch.device(f'cuda:{gpu}' if torch.cuda.is_available() else 'cpu')
+         model_path='model.pth',
+         file_path='img.png',
+         dataset='cifar10',
+         conditional=True):
+    dataset = DATASETS[dataset]
+    device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
-    model = Model(model_channels=model_channels,
+    model = Model(image_channels=dataset.image_channels,
+                  model_channels=model_channels,
                   activation_fn=activation_fn,
                   num_res_blocks=num_res_blocks,
                   channel_mult=channel_mult,
                   dropout=dropout,
-                  attention_resolutions=attention_resolutions)
+                  attention_resolutions=attention_resolutions,
+                  num_classes=dataset.num_classes)
     model.load_state_dict(torch.load(model_path, weights_only=True))
-    model = model.to(device)
+    model.to(device)
     model.eval()
-    _test(device, noise_scheduler, model, progress=True)
+    _test(device, noise_scheduler, model, file_path, progress=True, dataset=dataset.name, conditional=conditional)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
+    parser.add_argument('--dataset', choices=['mnist', 'cifar10', 'cifar100', 'celeba'], default='cifar10', help="Dataset to use")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
     parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
@@ -455,6 +481,10 @@ if __name__ == "__main__":
     parser.add_argument('--gpu', type=int, default=None, help="GPU index")
     parser.add_argument('--model', type=str, default='model.pth', help="Model file")
     parser.add_argument('--save-checkpoints', action='store_true', help="Save model checkpoints")
+    parser.add_argument('--log-interval', type=int, default=10, help="Image log interval")
+    parser.add_argument('--output-dir', type=str, default='output', help="Output directory")
+    parser.add_argument('--file-path', type=str, default='img.png', help="Output file path")
+    parser.add_argument('--conditional', action='store_true', help="Use conditional model")
     args = parser.parse_args()
 
     activation_fn = ACTIVATION_FUNCTIONS[args.activation]
@@ -471,7 +501,11 @@ if __name__ == "__main__":
               dropout=args.dropout,
               attention_resolutions=args.attention_resolutions,
               gpu=args.gpu,
-              save_checkpoints=args.save_checkpoints)
+              save_checkpoints=args.save_checkpoints,
+              log_interval=args.log_interval,
+              output_dir=args.output_dir,
+              dataset=args.dataset,
+              conditional=args.conditional)
     elif args.command == 'test':
         test(model_channels=args.model_channels,
              activation_fn=activation_fn,
@@ -480,4 +514,7 @@ if __name__ == "__main__":
              dropout=args.dropout,
              attention_resolutions=args.attention_resolutions,
              gpu=args.gpu,
-             model_path=args.model)
+             model_path=args.model,
+             file_path=args.file_path,
+             dataset=args.dataset,
+             conditional=args.conditional)
