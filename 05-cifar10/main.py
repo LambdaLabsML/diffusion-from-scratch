@@ -410,6 +410,36 @@ def test(model_channels=32,
     model.eval()
     _test(device, noise_scheduler, model, file_path, progress=True)
 
+def info(batch_size=128,
+         epochs=80,
+         lr=1e-3,
+         warmup=0,
+         grad_clip=None,
+         ema_decay=0.9999,
+         model_channels=32,
+         activation_fn=torch.nn.SiLU,
+         num_res_blocks=2,
+         channel_mult=(1, 2, 2, 2),
+         hflip=True,
+         dropout=0.1,
+         attention_resolutions=(2,),
+         gpu=None,
+         save_checkpoints=True,
+         log_interval=10,
+         output_dir='output'):
+    device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
+    noise_scheduler = NoiseScheduler().to(device)
+    model = Model(model_channels=model_channels,
+                  activation_fn=activation_fn,
+                  num_res_blocks=num_res_blocks,
+                  channel_mult=channel_mult,
+                  dropout=dropout,
+                  attention_resolutions=attention_resolutions)
+
+    import torchinfo
+    input_data = (torch.randn(1, 3, 32, 32, device=device), torch.tensor(0, device=device))
+    torchinfo.summary(model, input_data=input_data)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
@@ -424,7 +454,6 @@ if __name__ == "__main__":
     parser.add_argument('--num-res-blocks', type=int, default=2, help="Number of residual blocks")
     parser.add_argument('--channel-mult', type=int, nargs=4, default=(1, 2, 2, 2), help="Channel multipliers")
     parser.add_argument('--hflip', action='store_true', help="Use horizontal flips")
-    parser.add_argument('--no-hflip', dest='hflip', action='store_false', help="Do not use horizontal flips")
     parser.add_argument('--dropout', type=float, default=0.1, help="Dropout rate")
     parser.add_argument('--attention-resolutions', type=int, nargs='+', default=(2,), help="Resolutions to apply attention")
     parser.add_argument('--gpu', type=int, default=None, help="GPU index")
@@ -465,3 +494,21 @@ if __name__ == "__main__":
              gpu=args.gpu,
              model_path=args.model,
              file_path=args.file_path)
+    elif args.command == 'info':
+        info(batch_size=args.batch_size,
+             epochs=args.epochs,
+             lr=args.lr,
+             grad_clip=args.grad_clip,
+             warmup=args.warmup,
+             ema_decay=args.ema_decay,
+             model_channels=args.model_channels,
+             activation_fn=activation_fn,
+             num_res_blocks=args.num_res_blocks,
+             channel_mult=args.channel_mult,
+             hflip=args.hflip,
+             dropout=args.dropout,
+             attention_resolutions=args.attention_resolutions,
+             gpu=args.gpu,
+             save_checkpoints=args.save_checkpoints,
+             log_interval=args.log_interval,
+             output_dir=args.output_dir)
