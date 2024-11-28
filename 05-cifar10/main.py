@@ -442,7 +442,7 @@ def info(batch_size=128,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
-    parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
+    parser.add_argument('command', choices=['train', 'test', 'info'], help="Command to execute")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
     parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
