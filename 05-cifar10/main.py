@@ -13,6 +13,8 @@ from torch.optim.swa_utils import get_ema_multi_avg_fn
 from torchvision.utils import make_grid
 from tqdm import trange
 
+
+
 ACTIVATION_FUNCTIONS = {
     'relu': torch.nn.ReLU,
     'silu': torch.nn.SiLU,
