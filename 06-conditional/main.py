@@ -36,7 +36,7 @@ CONFIGS = {
         '--dropout', '0.1',
         '--hflip',
         '--save-checkpoints',
-        '--log-interval', '1',
+        '--log-interval', '5',
         '--progress',
     ],
     "cifar10-cond": [
@@ -56,7 +56,7 @@ CONFIGS = {
         '--dropout', '0.1',
         '--hflip',
         '--save-checkpoints',
-        '--log-interval', '1',
+        '--log-interval', '5',
         '--progress',
     ],
     'celeba-64': [
@@ -76,7 +76,7 @@ CONFIGS = {
         '--dropout', '0.0',
         '--hflip',
         '--save-checkpoints',
-        '--log-interval', '1',
+        '--log-interval', '5',
         '--progress',
     ],
     'celeba-128': [
@@ -96,7 +96,7 @@ CONFIGS = {
         '--dropout', '0.0',
         '--hflip',
         '--save-checkpoints',
-        '--log-interval', '1',
+        '--log-interval', '5',
         '--progress',
     ],
     'celeba-256': [
@@ -105,10 +105,11 @@ CONFIGS = {
         '--resolution', '256',
         '--batch-size', '16',
         '--grad-clip', '1',
-        '--lr', '5e-6',
-        '--warmup', '5000',
+        '--grad-accum', '4',
+        '--lr', '2e-5',
+        '--warmup', '20_000',
         '--steps', '2_000_000',
-        '--val-interval', '1000',
+        '--val-interval', '4000',
         '--model-channels', '128',
         '--channel-mult', '1', '1', '2', '2', '4', '4',
         '--num-res-blocks', '2',
@@ -116,7 +117,7 @@ CONFIGS = {
         '--dropout', '0.0',
         '--hflip',
         '--save-checkpoints',
-        '--log-interval', '1',
+        '--log-interval', '5',
         '--progress',
     ],
     'mnist': [
@@ -530,6 +531,7 @@ def train(batch_size=128,
           lr=1e-3,
           warmup=0,
           grad_clip=None,
+          grad_accum=1,
           ema_decay=0.9999,
           model_channels=32,
           activation_fn=torch.nn.SiLU,
@@ -575,11 +577,11 @@ def train(batch_size=128,
     ds = dataset.cls(transform=transform)
 
     sampler = None
-    print(f'val_interval: {val_interval}, steps: {steps}')
+    # print(f'val_interval: {val_interval}, steps: {steps}')
     if val_interval is not None:
         sampler = ContinuousSampler(ds, batch_size, val_interval, shuffle=True)
     data_loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, sampler=sampler, num_workers=2, pin_memory=True)
-    print(f'Length of dataset: {len(ds)}, length of dataloader: {len(data_loader)}')
+    # print(f'Length of dataset: {len(ds)}, length of dataloader: {len(data_loader)}')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = None
     if warmup > 0:
@@ -615,9 +617,10 @@ def train(batch_size=128,
             batches = enumerate(data_loader)
 
         for batch_idx, (x, cls) in batches:
+            if batch_idx % grad_accum == 0:
+                optimizer.zero_grad()
             x = x.to(device)
             cls = cls.to(device)
-            optimizer.zero_grad()
             noise = torch.randn_like(x, device=device)
             t = torch.randint(0, noise_scheduler.steps, (x.size(0),), device=device)
             x_t = noise_scheduler.add_noise(x, t, noise)
@@ -625,32 +628,33 @@ def train(batch_size=128,
                 pred_noise = model(x_t, t, cls)
             else:
                 pred_noise = model(x_t, t)
-            loss = criterion(pred_noise, noise)
+            loss = criterion(pred_noise, noise) / grad_accum
             loss.backward()
-            if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
-            ema.update_parameters(model)
+            if (batch_idx + 1) % grad_accum == 0 or batch_idx == len(data_loader) - 1:
+                if grad_clip is not None:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
+                ema.update_parameters(model)
             n += x.size(0)
             loss_epoch += loss.item()
+            loss_history.append(loss.item())
             if progress:
                 psnr = 20 * math.log10(noise.abs().max().item()) - 10 * math.log10(loss.item())
                 avg_loss_epoch = loss_epoch / (batch_idx + 1)
                 pbar.set_postfix(
-                    {'Iter': iteration, 'Epoch Loss': f'{avg_loss_epoch:.6f}', 'Loss': f'{loss.item():.6f}', 'PSNR': f'{psnr:.6f}'})
+                    {'It': iteration, 'AvgLoss': f'{avg_loss_epoch:.4f}', 'Loss': f'{loss.item():.4f}', 'PSNR': f'{psnr:.2f}'})
             iteration += 1
         loss_epoch /= len(data_loader)
-        if progress:
-            pbar.desc = f'Epoch {epoch:04d}, Loss {loss_epoch:.6f}'
-            pbar.close()
-
-        loss_history.append(loss_epoch)
 
         formatted_time = time.strftime("%H:%M:%S", time.gmtime(time.time() - start))
-        print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
-        plot_loss(loss_history, output_dir)
+        if progress:
+            pbar.desc = f'Epoch={epoch:04d}, L={loss_epoch:.4f}, {formatted_time}'
+            pbar.close()
+        else:
+            print(f"Epoch {epoch:04d}, Loss {loss_epoch:.6f}, Time {formatted_time}")
+        plot_loss(loss_history, output_dir, warmup)
 
         model_path = os.path.join(output_dir, 'model.pth')
         ema_path = os.path.join(output_dir, 'model-ema.pth')
@@ -670,15 +674,14 @@ def train(batch_size=128,
             _test(device, noise_scheduler, ema, ema_file_path, dataset=dataset.name, resolution=resolution,
                   conditional=conditional, progress=progress)
 
-
         if steps is not None and iteration > steps:
             break
 
 
-def plot_loss(loss_history, output_dir='output'):
+def plot_loss(loss_history, output_dir='output', warmup=0):
     csv_path = os.path.join(output_dir, 'loss.csv')
     with open(csv_path, 'w') as f:
-        f.write('epoch,loss\n')
+        f.write('iter,loss\n')
         for i, loss in enumerate(loss_history):
             f.write(f'{i + 1},{loss}\n')
 
@@ -686,9 +689,14 @@ def plot_loss(loss_history, output_dir='output'):
     for loss in loss_history[1:]:
         ema_loss.append(0.9 * ema_loss[-1] + 0.1 * loss)
 
+    y_limit = None
+    if len(loss_history) > warmup:
+        y_limit = max(loss_history[warmup:]) * 1.05
+
     plt.plot(loss_history, color='blue', label='Loss')
-    plt.plot(ema_loss, color='red', linestyle='dashed', label='EMA Loss')
-    plt.xlabel('Epoch')
+    # plt.plot(ema_loss, color='red', linestyle='dashed', label='EMA Loss')
+    plt.ylim(0, y_limit)
+    plt.xlabel('Iteration')
     plt.ylabel('Loss')
     plt.title('Training Loss')
     plt.grid()
@@ -711,6 +719,8 @@ def _test(device, noise_scheduler, model, file_path="img.png", progress=False, d
         classes = torch.arange(100).to(device)
     elif conditional:
         raise ValueError(f"Conditional model is not supported for {dataset.name}")
+    elif resolution == 256:
+        n, nr = 64, 8
 
     x = torch.randn(n, dataset.image_channels, resolution, resolution, device=device)
 
@@ -747,7 +757,8 @@ def test(model_channels=32,
          model_path='model.pth',
          file_path='img.png',
          dataset='cifar10',
-         conditional=True):
+         conditional=True,
+         resolution=None):
     dataset = DATASETS[dataset]
     device = torch.device(f'cuda:{gpu}' if gpu is not None else 'cpu')
     noise_scheduler = NoiseScheduler().to(device)
@@ -762,7 +773,7 @@ def test(model_channels=32,
     model.load_state_dict(torch.load(model_path, weights_only=True))
     model.to(device)
     model.eval()
-    _test(device, noise_scheduler, model, file_path, progress=True, dataset=dataset.name, conditional=conditional)
+    _test(device, noise_scheduler, model, file_path, progress=True, dataset=dataset.name, resolution=resolution, conditional=conditional)
 
 
 def load_config(parser, args):
@@ -782,8 +793,7 @@ def load_config(parser, args):
         setattr(config_args, k, v)
     return config_args
 
-
-def main(args=None):
+def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
     parser.add_argument('--dataset', choices=['mnist', 'cifar10', 'cifar100', 'celeba'], default='cifar10',
@@ -794,6 +804,7 @@ def main(args=None):
     parser.add_argument('--val-interval', type=int, default=None, help="Validation interval")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
     parser.add_argument('--grad-clip', type=float, default=None, help="Gradient clipping")
+    parser.add_argument('--grad-accum', type=int, default=1, help="Gradient accumulation")
     parser.add_argument('--warmup', type=int, default=0, help="Warmup steps")
     parser.add_argument('--ema-decay', type=float, default=0.9999, help="Exponential moving average decay")
     parser.add_argument('--model-channels', type=int, default=128, help="Number of channels in the model")
@@ -816,9 +827,13 @@ def main(args=None):
     parser.add_argument('--progress', action='store_true', help="Show progress bar")
     parser.add_argument('--config', choices=CONFIGS.keys(), default=None, help="Configuration to use")
 
-    args = parser.parse_args()
+    args = parser.parse_args(args=args)
     if args.config is not None:
         args = load_config(parser, args)
+    return args
+
+def main(args=None):
+    args = parse_args(args)
 
     activation_fn = ACTIVATION_FUNCTIONS[args.activation]
 
@@ -829,6 +844,7 @@ def main(args=None):
               val_interval=args.val_interval,
               lr=args.lr,
               grad_clip=args.grad_clip,
+              grad_accum=args.grad_accum,
               warmup=args.warmup,
               ema_decay=args.ema_decay,
               model_channels=args.model_channels,
