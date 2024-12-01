@@ -280,8 +280,9 @@ class NoiseScheduler(torch.nn.Module):
         alpha_bar = self.alpha_bar[t].view(-1, 1, 1, 1)
         return torch.sqrt(alpha_bar) * x0 + torch.sqrt(1 - alpha_bar) * noise
 
-    def sample_prev_step(self, xt, t, pred_noise):
-        z = torch.randn_like(xt)
+    def sample_prev_step(self, xt, t, pred_noise, z=None):
+        if z is None:
+            z = torch.randn_like(xt)
         t = t.view(-1, 1, 1, 1)
         z[t.expand_as(z) == 0] = 0
 
@@ -771,7 +772,7 @@ def test(model_channels=32,
                   attention_resolutions=attention_resolutions,
                   num_classes=dataset.num_classes)
     model.load_state_dict(torch.load(model_path, weights_only=True))
-    model.to(device)
+    model = model.to(device)
     model.eval()
     _test(device, noise_scheduler, model, file_path, progress=True, dataset=dataset.name, resolution=resolution, conditional=conditional)
 
