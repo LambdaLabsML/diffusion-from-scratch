@@ -1,4 +1,4 @@
-# Condition Models
+# Conditional Models
 
 Let's now train some conditional models.
 
