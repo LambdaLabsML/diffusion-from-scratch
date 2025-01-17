@@ -52,3 +52,20 @@ Now we can train a CIFAR10 conditional model with the following command:
 python main.py train --config cifar10-cond --gpu 0 --output-dir results/cifar10-cond
 ```
 
+Our model will periodically generate samples from each of the classes and save the grid of images.
+Here are the samples from the fully trained CIFAR10 conditional model:
+
+![CIFAR10 conditional samples](assets/cifar10-cond-results.png)
+
+Each of the rows corresponds to a different class:
+- airplane
+- automobile
+- bird
+- cat
+- deer
+- dog
+- frog
+- horse
+- ship
+- truck
+
