@@ -69,3 +69,14 @@ Each of the rows corresponds to a different class:
 - ship
 - truck
 
+## Conditional MNIST
+
+We can also train a conditional model on MNIST.
+
+```bash
+python main.py train --config mnist-cond --gpu 0 --output-dir results/mnist-cond
+```
+
+![MNIST conditional samples](assets/mnist-cond-results.png)
+
+
