@@ -59,67 +59,6 @@ CONFIGS = {
         '--log-interval', '5',
         '--progress',
     ],
-    'celeba-64': [
-        'train',
-        '--dataset', 'celeba',
-        '--resolution', '64',
-        '--batch-size', '64',
-        '--grad-clip', '1',
-        '--lr', '2e-5',
-        '--warmup', '5000',
-        '--steps', '500_000',
-        '--val-interval', '1000',
-        '--model-channels', '128',
-        '--channel-mult', '1', '1', '2', '2', '4', '4',
-        '--num-res-blocks', '2',
-        '--attention-resolutions', '16',
-        '--dropout', '0.0',
-        '--hflip',
-        # '--save-checkpoints',
-        '--log-interval', '5',
-        '--progress',
-    ],
-    'celeba-128': [
-        'train',
-        '--dataset', 'celeba',
-        '--resolution', '128',
-        '--batch-size', '64',
-        '--grad-clip', '1',
-        '--lr', '2e-5',
-        '--warmup', '5000',
-        '--steps', '500_000',
-        '--val-interval', '1000',
-        '--model-channels', '128',
-        '--channel-mult', '1', '1', '2', '2', '4', '4',
-        '--num-res-blocks', '2',
-        '--attention-resolutions', '16',
-        '--dropout', '0.0',
-        '--hflip',
-        # '--save-checkpoints',
-        '--log-interval', '5',
-        '--progress',
-    ],
-    'celeba-256': [
-        'train',
-        '--dataset', 'celeba',
-        '--resolution', '256',
-        '--batch-size', '16',
-        '--grad-clip', '1',
-        '--grad-accum', '4',
-        '--lr', '2e-5',
-        '--warmup', '20_000',
-        '--steps', '2_000_000',
-        '--val-interval', '4000',
-        '--model-channels', '128',
-        '--channel-mult', '1', '1', '2', '2', '4', '4',
-        '--num-res-blocks', '2',
-        '--attention-resolutions', '16',
-        '--dropout', '0.0',
-        '--hflip',
-        # '--save-checkpoints',
-        '--log-interval', '5',
-        '--progress',
-    ],
     'mnist': [
         'train',
         '--dataset', 'mnist',
@@ -162,81 +101,6 @@ CONFIGS = {
 CSV = namedtuple("CSV", ["header", "index", "data"])
 
 
-class CelebAHQ(torchvision.datasets.VisionDataset):
-    def __init__(self, root,
-                 target_type: Union[List[str], str] = "attr",
-                 transform: Optional[Callable] = None,
-                 target_transform: Optional[Callable] = None):
-        super().__init__(root, transform=transform, target_transform=target_transform)
-        if isinstance(target_type, list):
-            self.target_type = target_type
-        else:
-            self.target_type = [target_type]
-
-        if not self.target_type and self.target_transform is not None:
-            raise RuntimeError("target_transform is specified but target_type is empty")
-
-        attr = self._load_csv("CelebAMask-HQ-attribute-anno.txt", header=1)
-        self.filename = attr.index
-        self.attr = attr.data
-        # map from {-1, 1} to {0, 1}
-        self.attr = torch.div(self.attr + 1, 2, rounding_mode="floor")
-        self.attr_names = attr.header
-
-    def _load_csv(
-            self,
-            filename: str,
-            header: Optional[int] = None,
-    ) -> CSV:
-        with open(os.path.join(self.root, filename)) as csv_file:
-            data = list(csv.reader(csv_file, delimiter=" ", skipinitialspace=True))
-
-        if header is not None:
-            headers = data[header]
-            data = data[header + 1:]
-        else:
-            headers = []
-
-        indices = [row[0] for row in data]
-        data = [row[1:] for row in data]
-        data_int = [list(map(int, i)) for i in data]
-
-        return CSV(headers, indices, torch.tensor(data_int))
-
-    def __getitem__(self, index: int) -> Tuple[Any, Any]:
-        X = Image.open(os.path.join(self.root, "CelebA-HQ-img-orig", self.filename[index]))
-
-        target: Any = []
-        for t in self.target_type:
-            if t == "attr":
-                target.append(self.attr[index, :])
-            # elif t == "identity":
-            #     target.append(self.identity[index, 0])
-            # elif t == "bbox":
-            #     target.append(self.bbox[index, :])
-            # elif t == "landmarks":
-            #     target.append(self.landmarks_align[index, :])
-            else:
-                # TODO: refactor with utils.verify_str_arg
-                raise ValueError(f'Target type "{t}" is not recognized.')
-
-        if self.transform is not None:
-            X = self.transform(X)
-
-        if target:
-            target = tuple(target) if len(target) > 1 else target[0]
-
-            if self.target_transform is not None:
-                target = self.target_transform(target)
-        else:
-            target = None
-
-        return X, target
-
-    def __len__(self) -> int:
-        return len(self.attr)
-
-
 ACTIVATION_FUNCTIONS = {
     'relu': torch.nn.ReLU,
     'silu': torch.nn.SiLU,
@@ -249,7 +113,6 @@ dataset = [
     Dataset('mnist', partial(torchvision.datasets.MNIST, root='./data', train=True, download=True), 1, 28, 10),
     Dataset('cifar10', partial(torchvision.datasets.CIFAR10, root='./data', train=True, download=True), 3, 32, 10),
     Dataset('cifar100', partial(torchvision.datasets.CIFAR100, root='./data', train=True, download=True), 3, 32, 100),
-    Dataset('celeba', partial(CelebAHQ, root='./data/CelebAMask-HQ'), 3, 1024, 40),
 ]
 DATASETS = {d.name: d for d in dataset}
 
@@ -533,7 +396,6 @@ def train(batch_size=128,
           lr=1e-3,
           warmup=0,
           grad_clip=None,
-          grad_accum=1,
           ema_decay=0.9999,
           model_channels=32,
           activation_fn=torch.nn.SiLU,
@@ -619,8 +481,7 @@ def train(batch_size=128,
             batches = enumerate(data_loader)
 
         for batch_idx, (x, cls) in batches:
-            if batch_idx % grad_accum == 0:
-                optimizer.zero_grad()
+            optimizer.zero_grad()
             x = x.to(device)
             cls = cls.to(device)
             noise = torch.randn_like(x, device=device)
@@ -630,15 +491,14 @@ def train(batch_size=128,
                 pred_noise = model(x_t, t, cls)
             else:
                 pred_noise = model(x_t, t)
-            loss = criterion(pred_noise, noise) / grad_accum
+            loss = criterion(pred_noise, noise)
             loss.backward()
-            if (batch_idx + 1) % grad_accum == 0 or batch_idx == len(data_loader) - 1:
-                if grad_clip is not None:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-                optimizer.step()
-                if scheduler is not None:
-                    scheduler.step()
-                ema.update_parameters(model)
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            ema.update_parameters(model)
             n += x.size(0)
             loss_epoch += loss.item()
             loss_history.append(loss.item())
@@ -798,7 +658,7 @@ def load_config(parser, args):
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Simple Diffusion Process with Configurable Parameters")
     parser.add_argument('command', choices=['train', 'test', 'eval'], help="Command to execute")
-    parser.add_argument('--dataset', choices=['mnist', 'cifar10', 'cifar100', 'celeba'], default='cifar10',
+    parser.add_argument('--dataset', choices=['mnist', 'cifar10', 'cifar100'], default='cifar10',
                         help="Dataset to use")
     parser.add_argument('--batch-size', type=int, default=128, help="Batch size")
     parser.add_argument('--epochs', type=int, default=2000, help="Number of epochs")
@@ -806,7 +666,6 @@ def parse_args(args=None):
     parser.add_argument('--val-interval', type=int, default=None, help="Validation interval")
     parser.add_argument('--lr', type=float, default=2e-4, help="Learning rate")
     parser.add_argument('--grad-clip', type=float, default=None, help="Gradient clipping")
-    parser.add_argument('--grad-accum', type=int, default=1, help="Gradient accumulation")
     parser.add_argument('--warmup', type=int, default=0, help="Warmup steps")
     parser.add_argument('--ema-decay', type=float, default=0.9999, help="Exponential moving average decay")
     parser.add_argument('--model-channels', type=int, default=128, help="Number of channels in the model")
@@ -846,7 +705,6 @@ def main(args=None):
               val_interval=args.val_interval,
               lr=args.lr,
               grad_clip=args.grad_clip,
-              grad_accum=args.grad_accum,
               warmup=args.warmup,
               ema_decay=args.ema_decay,
               model_channels=args.model_channels,
