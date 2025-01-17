@@ -75,7 +75,7 @@ CONFIGS = {
         '--attention-resolutions', '16',
         '--dropout', '0.0',
         '--hflip',
-        '--save-checkpoints',
+        # '--save-checkpoints',
         '--log-interval', '5',
         '--progress',
     ],
@@ -95,7 +95,7 @@ CONFIGS = {
         '--attention-resolutions', '16',
         '--dropout', '0.0',
         '--hflip',
-        '--save-checkpoints',
+        # '--save-checkpoints',
         '--log-interval', '5',
         '--progress',
     ],
@@ -116,7 +116,7 @@ CONFIGS = {
         '--attention-resolutions', '16',
         '--dropout', '0.0',
         '--hflip',
-        '--save-checkpoints',
+        # '--save-checkpoints',
         '--log-interval', '5',
         '--progress',
     ],
@@ -482,11 +482,12 @@ class Model(torch.nn.Module):
             torch.nn.Conv2d(model_channels, image_channels, kernel_size=3, padding=1)
         )
 
-    def forward(self, x, t, class_idx=None):
+    def forward(self, x, t, class_idx=None, emb_class=None):
         emb = self.embed(t)
 
         if self.conditional:
-            emb_class = self.class_emb(class_idx)
+            if emb_class is None:
+                emb_class = self.class_emb(class_idx)
             emb = emb + emb_class
         hs = []
         for module in self.input_blocks:
