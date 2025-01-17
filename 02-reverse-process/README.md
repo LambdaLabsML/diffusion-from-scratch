@@ -8,7 +8,7 @@ In the forward process, at each timestep, we progressively added noise to the im
 
 Of course, because the noise added at step is random, there is no way to deterministically recover the actual image. Instead, we'll train a model to approximate the noise at timestep $t$, given image $x_t$.
 
-Assuming we have some model that can predict this, our training objective now becomings minimizing the Kullback–Leibler divergence [[1]](wikipedia2023kullbackleiblerdivergence) between our predictions and the ground truth. Or in simpler terms, we want to minimize the surprise from predictions from our model, compared to the actual distribution:
+Assuming we have some model that can predict this, our training objective now becomings minimizing the Kullback–Leibler divergence [[1]](#wikipedia2023kullbackleiblerdivergence) between our predictions and the ground truth. Or in simpler terms, we want to minimize the surprise from predictions from our model, compared to the actual distribution:
 
 $$
 \Huge
@@ -31,7 +31,7 @@ $$
 We now have the basic training loop:
 
 1. Sample image $x_0$ from our dataset
-2. Sample timetep $t$ from Uniform$(1, \cdots, T)$
+2. Sample timetep $t$ from Uniform$`(1, \cdots, T)`$
 3. Sample Gaussian noise $\epsilon$ from $\mathcal{N}(0, 1)$
 4. Compute our noised image $x_t$ using $x_0$, $t$, $\epsilon$
 5. Predict noise $\epsilon_{\theta}$ from our model, given $(x_t, t)$
